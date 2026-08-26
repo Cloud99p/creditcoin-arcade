@@ -1,0 +1,24 @@
+# Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.env
+.env.local
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Editor
+.vscode/
+.idea/

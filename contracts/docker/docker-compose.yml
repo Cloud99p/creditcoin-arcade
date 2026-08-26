@@ -1,0 +1,19 @@
+services:
+  creditcoin-devnet:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: creditcoin-devnet
+    env_file:
+      - ../.env
+    ports:
+      - "9944:9944"   # EVM HTTP + WS RPC, Substrate RPC
+      - "9933:9933"   # Reserved (CC3 can expose a separate EVM HTTP port)
+      - "30333:30333" # P2P
+    environment:
+      # Default off: image is useful as a plain RPC node. Set AUTO_DEPLOY=1
+      # in your .env to run the sample Deploy script after the node boots.
+      AUTO_DEPLOY: "${AUTO_DEPLOY:-0}"
+      AUTO_FUND_FROM_NODE: "${AUTO_FUND_FROM_NODE:-0}"
+      AUTO_FUND_AMOUNT: "${AUTO_FUND_AMOUNT:-10ether}"
+    restart: unless-stopped

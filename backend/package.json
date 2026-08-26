@@ -1,0 +1,24 @@
+{
+  "name": "arcade-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Arcade game API — auth, validation, room clock, settlement triggers, omni-intelligence",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ethers": "^6.15.0",
+    "dotenv": "^17.2.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0",
+    "@types/express": "^5.0.0"
+  }
+}
