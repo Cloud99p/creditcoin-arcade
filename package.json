@@ -6,7 +6,8 @@
   "type": "module",
   "workspaces": [
     "worker",
-    "backend"
+    "backend",
+    "apps"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

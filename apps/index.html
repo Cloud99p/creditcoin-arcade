@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>ARCFT Arcade — Fruit Merge & Nutty Rider on Creditcoin</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="logo">🎮 ARCFT <span>Arcade</span></div>
+        <div class="wallet">
+          <span id="coinBalance" class="coin-badge">₵ 0</span>
+          <button id="walletBtn" class="btn ghost">Connect Wallet</button>
+        </div>
+      </header>
+
+      <!-- ============================= VIEW: LOBBY ============================= -->
+      <main id="view-lobby" class="view active">
+        <section class="hero">
+          <h1 class="neon-title">ARCADE ON CREDITCOIN</h1>
+          <p class="subtitle">Every score is cryptographically verified on-chain via the <strong>Attestcoin Protocol</strong>. Play, climb the leaderboard, win ARCFT.</p>
+        </section>
+
+        <section class="game-grid">
+          <div class="game-card" data-game="fruit-merge">
+            <div class="game-art fruit-art">🍒</div>
+            <h3>Fruit Merge</h3>
+            <p>Drop fruit, merge to 7 tiers. Top tier <strong>CLEARS</strong>. Max the bowl.</p>
+            <button class="btn primary">Play →</button>
+          </div>
+          <div class="game-card" data-game="nutty-rider">
+            <div class="game-art rider-art">🏍️</div>
+            <h3>Nutty Rider</h3>
+            <p>Tilt-control biker. Dodge fans, logs & oil. Go the distance.</p>
+            <button class="btn primary">Play →</button>
+          </div>
+        </section>
+
+        <section class="panels">
+          <div class="panel">
+            <h3>🏆 Global Leaderboard</h3>
+            <ul id="globalLeaderboard" class="leaderboard"><li class="muted">No scores yet — be first!</li></ul>
+          </div>
+          <div class="panel">
+            <h3>🕹️ Rooms</h3>
+            <div class="rooms-toolbar">
+              <button id="createRoomBtn" class="btn small">+ Create Room</button>
+              <span id="roomsStatus" class="muted small"></span>
+            </div>
+            <ul id="roomList" class="room-list"><li class="muted">No rooms yet.</li></ul>
+          </div>
+        </section>
+      </main>
+
+      <!-- ============================= VIEW: GAME ============================= -->
+      <main id="view-game" class="view">
+        <div class="game-header">
+          <button id="backBtn" class="btn ghost small">← Lobby</button>
+          <h2 id="gameTitle">Game</h2>
+          <div id="gameScore" class="score-badge">0</div>
+        </div>
+        <div id="gameCanvasWrap" class="canvas-wrap">
+          <canvas id="gameCanvas"></canvas>
+        </div>
+        <div id="gameOverlay" class="overlay hidden">
+          <div class="overlay-card">
+            <h2 id="ovTitle">GAME OVER</h2>
+            <p id="ovScore" class="big-score">0</p>
+            <p id="ovDetail" class="muted"></p>
+            <button id="ovRestart" class="btn primary">Play Again</button>
+            <button id="ovLobby" class="btn ghost">Lobby</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
