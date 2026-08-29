@@ -65,7 +65,8 @@ export interface ScoreEntry {
   mode: "global" | "room";
   roomId?: string;
   ts: number;
-  txHash?: string; // Attestcoin ScoreVerified provenance
+  txHash?: string; // source-chain GameResultSubmitted tx (Sepolia)
+  proofTx?: string; // ScoreASC proof-verification tx (Creditcoin)
   verified: boolean;
 }
 

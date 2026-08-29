@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { Store } from "./store.js";
 import { Economy } from "./economy.js";
 import { GAME_LIST, GAMES, MARKETPLACE } from "./types.js";
+import { emitGameResult, isSourceArmed } from "./emitSource.js";
 
 const app = express();
 app.use(express.json());
@@ -91,15 +92,25 @@ app.post(
   handle(async (req, res) => {
     const addr = authedAddress(req);
     const u = userOf(addr);
-    const { gameId, score, mode = "global", roomId, txHash } = req.body ?? {};
+    const { gameId, score, mode = "global", roomId } = req.body ?? {};
     if (!GAMES[Number(gameId)]) return { error: "invalid gameId" };
     if (typeof score !== "number" || score < 0) return { error: "invalid score" };
+
+    // Authoritative game-end → emit on the Sepolia GameArbiter (or simulate).
+    // Nonce = per-(player,game) counter so the worker's replay protection holds.
+    const nonce = Math.floor(Date.now() / 1000) % 1000000 + Math.floor(Math.random() * 1000);
+    const emission = await emitGameResult(addr, Number(gameId), score, nonce);
+    const txHash = emission.txHash;
+    // A result is only VERIFIED once the worker proves the source event on
+    // ScoreASC and relays it back; a simulated/live emission alone does not
+    // mark it verified. (We keep txHash for provenance but verified=false until
+    // the worker relay flips it.)
 
     if (mode === "room") {
       const room = store.getRoom(String(roomId));
       if (!room) return { error: "room not found" };
-      store.addScore({ id: `${Date.now()}-${addr}-${Math.random().toString(36).slice(2, 7)}`, gameId: Number(gameId), player: addr, score, mode: "room", roomId: room.id, ts: Date.now(), txHash, verified: !!txHash });
-      return { ok: true, mode: "room", roomId: room.id };
+      store.addScore({ id: `${Date.now()}-${addr}-${Math.random().toString(36).slice(2, 7)}`, gameId: Number(gameId), player: addr, score, mode: "room", roomId: room.id, ts: Date.now(), txHash, verified: false });
+      return { ok: true, mode: "room", roomId: room.id, txHash, source: emission.live ? "live" : "sim" };
     }
 
     const entry = {
@@ -109,11 +120,11 @@ app.post(
       score,
       mode: "global" as const,
       ts: Date.now(),
-      txHash: txHash || null,
-      verified: !!txHash,
+      txHash,
+      verified: false,
     };
     const result = await economy.recordGlobalScore(entry);
-    return { ok: true, score, balance: result.user.balance, house: result.house, pool: result.pool, championPayout: result.championPayout, txHash: entry.txHash };
+    return { ok: true, score, balance: result.user.balance, house: result.house, pool: result.pool, championPayout: result.championPayout, txHash, source: emission.live ? "live" : "sim", armed: isSourceArmed() };
   }),
 );
 
@@ -126,6 +137,33 @@ app.get(
       gameId: gameId ?? "all",
       scores: scores.map((s) => ({ player: s.player, score: s.score, gameId: s.gameId, verified: s.verified, ts: s.ts })),
     };
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Worker verification reconciliation
+// ---------------------------------------------------------------------------
+// The Attestcoin worker proves a source GameResultSubmitted on ScoreASC, then
+// calls this endpoint to reconcile the pending local (player, gameId, score)
+// entry as chain-VERIFIED. No play fee is charged — this is a reconciliation,
+// not a submission. Requests are idempotent (duplicate relays are safe).
+//
+// Auth: if ARCFT_WORKER_TOKEN is set, it must match `x-worker-token`; else the
+// demo trusts the `x-address` header. In prod always set the token.
+const WORKER_TOKEN = process.env.ARCFT_WORKER_TOKEN || "";
+app.post(
+  "/api/verify",
+  handle(async (req) => {
+    if (WORKER_TOKEN && req.headers["x-worker-token"] !== WORKER_TOKEN) {
+      return { error: "WORKER_AUTH_REQUIRED" };
+    }
+    const workerAddr = (req.headers["x-address"] as string) || "";
+    const { player, gameId, score, txHash } = req.body ?? {};
+    if (!player || !GAMES[Number(gameId)] || typeof score !== "number") {
+      return { error: "invalid verify payload" };
+    }
+    const matched = store.verifyScore(String(player), Number(gameId), score, String(txHash || ""));
+    return { ok: true, matched: matched.map((s) => s.id), verifiedCount: matched.length, by: workerAddr || "worker" };
   }),
 );
 

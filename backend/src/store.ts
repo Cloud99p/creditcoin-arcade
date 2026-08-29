@@ -99,6 +99,31 @@ export class Store {
       .slice(0, limit);
   }
 
+  /**
+   * Reconcile a worker-proven result: mark the matching unverified
+   * (player, gameId, score) entry as chain-verified with the on-chain proof tx.
+   * Returns the updated score(s) or [] if no pending match (already verified /
+   * never submitted / stale). Idempotent — safe for duplicate worker relays.
+   */
+  verifyScore(player: string, gameId: number, score: number, proofTx: string): ScoreEntry[] {
+    const addr = player.toLowerCase();
+    const matched: ScoreEntry[] = [];
+    for (const s of this.db.scores) {
+      if (
+        s.player === addr &&
+        s.gameId === gameId &&
+        s.score === score &&
+        !s.verified
+      ) {
+        s.verified = true;
+        s.proofTx = proofTx;
+        matched.push(s);
+      }
+    }
+    if (matched.length) this._save();
+    return matched;
+  }
+
   // --- rooms ---------------------------------------------------------------
   getRoom(id: string): Room | undefined {
     return this.db.rooms.find((r) => r.id === id);

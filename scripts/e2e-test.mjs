@@ -48,6 +48,19 @@ function check(name, cond, extra = "") {
   const s2 = await j("/api/score/submit", { method: "POST", addr: A, body: { gameId: 1, score: 2400, mode: "global" } });
   check("score 2 accepted", s2.ok === true);
 
+  console.log("── attestcoin emission + verify reconciliation ─────────");
+  const liveArmed = s2.source === "live";
+  check("submit returns a source txHash (live or sim)", typeof s2.txHash === "string" && s2.txHash.length > 0);
+  check("source mode is live or sim", s2.source === "live" || s2.source === "sim");
+  check("submit leaves score UNVERIFIED until worker relays", !s2.verified);
+  // Simulate the worker's /api/verify reconciliation (proven on ScoreASC)
+  const verified = await j("/api/verify", { method: "POST", addr: B, body: { player: A, gameId: 1, score: 2400, txHash: "0xproof" } });
+  check("verify reconciled exactly 1 pending score", verified.verifiedCount === 1, `(${verified.verifiedCount})`);
+  check("verify is idempotent (2nd relay matches 0)", (await j("/api/verify", { method: "POST", addr: B, body: { player: A, gameId: 1, score: 2400, txHash: "0xproof2" } })).verifiedCount === 0);
+  const lbAfter = await j("/api/leaderboard?gameId=1");
+  check("leaderboard now shows the 2400 as verified", lbAfter.scores.find((s) => s.score === 2400)?.verified === true);
+  check("non-matching verify matches 0 (never committed)", (await j("/api/verify", { method: "POST", addr: B, body: { player: A, gameId: 1, score: 999999, txHash: "0x" } })).verifiedCount === 0);
+
   console.log("── leaderboard ────────────────────────────────────");
   const lb = await j("/api/leaderboard?gameId=1");
   check("leaderboard has 2 scores", lb.scores.length === 2);

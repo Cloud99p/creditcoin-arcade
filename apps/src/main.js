@@ -230,11 +230,10 @@ function startRunner(def, char) {
 
 function finishGame(score) {
   const w = api.getWallet();
-  const txId = `demo-${Date.now()}`;
-  api.submitScore({ gameId: active.def.gameId, player: w.address, score, mode: "global", txHash: txId });
+  api.submitScore({ gameId: active.def.gameId, player: w.address, score, mode: "global" });
   $("#ovTitle").textContent = "GAME OVER";
   $("#ovScore").textContent = score.toLocaleString();
-  $("#ovDetail").textContent = `${active.def.title} · result queued for Attestcoin verification`;
+  $("#ovDetail").textContent = `${active.def.title} · score pending — queued for Attestcoin verification`;
   showOverlay();
   refreshWallet();
 }

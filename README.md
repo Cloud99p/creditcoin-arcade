@@ -141,3 +141,26 @@ node scripts/e2e-test.mjs  # backend economy e2e smoke test (26 checks)
 - Beating the champion micro-pays them the pool.
 - Rooms: entry-fee escrow on create/join, settle = rank players + house cut + winner payout.
 - Marketplace: skins/cosmetics + spin wheel.
+
+### Loop closed (Aug 30): backend <-> worker <-> chain emission
+- Backend now **emits GameResultSubmitted** on the Sepolia GameArbiter for every
+  authoritative score (simulated with a synthetic txHash when no Sepolia env is
+  set; live broadcast when armed). See \ackend/src/emitSource.ts\.
+- Worker relays the **ScoreASC proof-verification** to a dedicated
+  \POST /api/verify\ — an idempotent reconciliation that flips the matching
+  pending (player, gameId, score) to \erified\ **without** charging a second
+  play fee. Auth via optional \ARCFT_WORKER_TOKEN\ (\x-worker-token\).
+- E2E now covers the emission + verify reconciliation path: **33/33 assertions**
+  (\scripts/e2e-test.mjs\).
+
+### To go fully LIVE (needs funded keys — I cannot deploy without them)
+1. **Sepolia**: fund a deployer, run \orge script DeployArcade.s.sol\ (or deploy
+   just GameArbiter) ? set \USCTEST_GAME_ARBITER\, \USCTEST_SOURCE_RPC\,
+   \USCTEST_SOURCE_KEY\ (verifier role) in backend .env.
+2. **CC3 testnet**: fund a deployer, run the full \DeployArcade.s.sol\ script ?
+   capture ScoreASC + engines addresses.
+3. **Worker**: set \USCTEST_RELAYER_KEY\ (CC3 gas), \USCTEST_CC3_RPC\,
+   \USCTEST_PROVER_URL\, \USCTEST_GAME_ARBITER\, \USCTEST_SCORE_ASC\,
+   \ARCFT_BACKEND_ADDRESS\ + \ARCFT_WORKER_TOKEN\, and run the worker.
+   It will then watch the real Sepolia arbiter, prove on ScoreASC, and reconcile
+   verified scores back to the backend.

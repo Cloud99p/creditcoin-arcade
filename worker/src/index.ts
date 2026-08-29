@@ -19,28 +19,30 @@ import { proofProvider, blockProver, chainInfo } from "@gluwa/usc-sdk";
 
 // --- backend relay ---------------------------------------------------------
 // After a successful on-chain verify+emit, notify the arcade backend so the
-// off-chain economy marks the result verified + triggers settlement.
+// off-chain economy marks the matching (player, gameId, score) result VERIFIED
+// (no play fee is charged again — this is a reconciliation, not a submit).
 const BACKEND_URL = process.env.ARCFT_BACKEND_URL || "http://localhost:8080";
 const BACKEND_ADDRESS = process.env.ARCFT_BACKEND_ADDRESS || "";
+const BACKEND_TOKEN = process.env.ARCFT_WORKER_TOKEN || "";
 async function relayToBackend(player: string, gameId: bigint, score: bigint, txHash: string) {
   if (!BACKEND_ADDRESS) return;
   try {
-    await fetch(`${BACKEND_URL}/api/score/submit`, {
+    await fetch(`${BACKEND_URL}/api/verify`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(BACKEND_ADDRESS ? { "x-address": BACKEND_ADDRESS } : {}),
+        ...(BACKEND_TOKEN ? { "x-worker-token": BACKEND_TOKEN } : {}),
       },
       body: JSON.stringify({
         gameId: Number(gameId),
         player,
         score: Number(score),
-        mode: "global",
-        txHash,
+        txHash, // on-chain verification tx (ScoreASC proof submit)
       }),
     });
   } catch (err: any) {
-    console.warn(`[worker] backend relay failed: ${err?.message || err}`);
+    console.warn(`[worker] backend verify relay failed: ${err?.message || err}`);
   }
 }
 
