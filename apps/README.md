@@ -1,59 +1,40 @@
-# ARCFT Arcade — Game Clients
+# ARCFT Arcade — Frontend Hub
 
-Client-side game hub for the Creditcoin arcade. Two games, both pure-canvas,
-zero external game deps, wired to the backend + Attestcoin score pipeline.
+The complete arcade UI: **Play** (both games selectable), **Leaderboard**,
+**Marketplace** (shop + spin wheel), **Rooms** (create/join/settle), and a live
+**economy bar** (ARCFT balance + spins). Wired to the backend with offline
+fallback.
+
+## Views
+
+| View | Contents |
+|------|----------|
+| 🎮 **Play** | 2 selectable games + economy explainer + live hub stats |
+| 🏆 **Leaderboard** | Global top scores, filter by all / Fruit Merge / Nutty Rider |
+| 🛍️ **Marketplace** | Shop (skins/cosmetics/consumables) + **Spin Wheel** 🎡 |
+| 🕹️ **Rooms** | Create (entry fee/duration/max) → join → settle, payouts |
+| ⚙️ **Game** | Canvas games + Nutty Rider character picker |
 
 ## Games
 
-| Game | gameId | How it works | Scoring |
-|------|:------:|--------------|---------|
-| **Fruit Merge** 🍒 | 1 | Drop fruit, same-tier merges to next tier. Tier 7 **CLEARS** (vanish + respawn). | Merge points + bowl bonus |
-| **Nutty Rider** 🏍️ | 2 | Hold = tilt right (max 90°, eased). Dodge fans, swung logs, oil. 4 characters. | Distance / segments |
-
-### Nutty Rider characters
-| Char | Ability |
-|------|---------|
-| 🐷 Pig | Iron Body — resists fan knockback |
-| 🐐 Goat | Climber — recovers balance faster |
-| 🍌 Banana | Grip — holds corners better |
-| 🦗 Cricket | Hop — clears low logs (Space) |
+- **Fruit Merge** (gameId 1) — 7-tier Suika merge, tier-7 CLEAR, overflow game-over.
+- **Nutty Rider** (gameId 2) — tilt biker, 4 characters, fans/logs/oil.
 
 ## Run
 
 ```bash
-npm install                 # from repo root (workspace)
-npm run dev -w apps         # http://localhost:5173
-npm run build -w apps       # production build -> apps/dist
+npm install                  # repo root (workspaces)
+npm run dev -w apps          # http://localhost:5173 (proxy /api -> :8080)
+npm run build -w apps        # -> apps/dist
 ```
 
-Dev proxy forwards `/api/*` → `http://localhost:8080` (arcade backend).
+For the full stack: `npm run dev -w backend` (API on :8080) alongside `-w apps`.
 
-## Score pipeline
+## Stack (frontend)
 
-On game end the client calls `POST /api/score/submit` with
-`{ gameId, player, score, mode, roomId }`. In production the backend
-authenticates the wallet, relays the authoritative result to the worker, which
-proves it via the Attestcoin Protocol onto **ScoreASC** for on-chain
-verification and economy settlement.
+Vanilla ES modules + Canvas — zero game-framework dependency, fast to deploy
+(Vite static). `src/api.js` is the single backend client; swap the mock wallet
+(`connectWallet`) for a real CC3 signer when testnet funding is wired.
 
-## Files
-
-```
-apps/
-  index.html          Lobby + game + overlay shells
-  vite.config.js      Dev server + /api proxy
-  src/main.js         Router, wallet, leaderboard, rooms, game wiring
-  src/api.js          Backend client + mock wallet + local ledger
-  src/styles.css      Arcade theme
-  src/games/
-    fruit-merge.js    Suika-style merge engine
-    nutty-rider.js    Tilt-control biker engine
-```
-
-## Demo notes
-
-- Uses a **mock wallet** (localStorage) and **local ledger/rooms** so the app
-  is fully playable offline/demo. Swap `connectWallet()`/`submitScore()` in
-  `src/api.js` for a real CC3 browser signer when testnet funding is wired.
-- Verified headless: fruit merge overflow + merge cascade fire correctly;
-  rider collision, distance, speed scaling and steering all function.
+Score flow: game end → `submitScore()` → backend `/score/submit` → (prod) worker
+proves via Attestcoin → ScoreASC verified event → leaderboard/economy settle.

@@ -17,6 +17,33 @@ import "dotenv/config";
 import { ethers } from "ethers";
 import { proofProvider, blockProver, chainInfo } from "@gluwa/usc-sdk";
 
+// --- backend relay ---------------------------------------------------------
+// After a successful on-chain verify+emit, notify the arcade backend so the
+// off-chain economy marks the result verified + triggers settlement.
+const BACKEND_URL = process.env.ARCFT_BACKEND_URL || "http://localhost:8080";
+const BACKEND_ADDRESS = process.env.ARCFT_BACKEND_ADDRESS || "";
+async function relayToBackend(player: string, gameId: bigint, score: bigint, txHash: string) {
+  if (!BACKEND_ADDRESS) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/score/submit`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(BACKEND_ADDRESS ? { "x-address": BACKEND_ADDRESS } : {}),
+      },
+      body: JSON.stringify({
+        gameId: Number(gameId),
+        player,
+        score: Number(score),
+        mode: "global",
+        txHash,
+      }),
+    });
+  } catch (err: any) {
+    console.warn(`[worker] backend relay failed: ${err?.message || err}`);
+  }
+}
+
 // --- env ------------------------------------------------------------------
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -109,6 +136,8 @@ async function main() {
         console.log(
           `[onchain] precompile verify+emit tx=${receipt?.hash} status=${receipt?.status}`,
         );
+        // Notify backend so the off-chain economy marks the result verified.
+        await relayToBackend(player, gameId, score, receipt?.hash || txHash);
       } catch (err: any) {
         console.error(`[worker][error] ${err?.message || err}`);
       }

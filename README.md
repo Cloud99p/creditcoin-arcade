@@ -114,3 +114,30 @@ Pig (Iron Body) Â· Goat (Climber) Â· Banana (Grip) Â· Cricket (Hop)
 ## License
 
 MIT (see `contracts/LICENSE` â€” template MIT; subject to change before submission).
+
+---
+
+## Full-stack status (Aug 29, 2026)
+
+End-to-end arcade is built and verified — contracts, worker, backend, frontend.
+
+| Layer | Status | Notes |
+|-------|:------:|-------|
+| Contracts (CC3) | Done | ARCFT, CoinVault, ArcadeBank (+operator), GameArbiter, ScoreASC, LeaderboardEngine, RoomEngine — 16/16 forge tests, deployed by DeployArcade.s.sol |
+| Worker | Done | Attestcoin readability worker: watches Sepolia GameArbiter, builds Merkle+continuity proof, verifies via 0x0FD2, relays verified result to backend |
+| Backend | Done | Full REST API: wallet/economy, leaderboard, rooms (escrow+settle), marketplace, spin, stats — 26/26 e2e assertions |
+| Frontend (apps/) | Done | Vite hub: Play (2 games), Leaderboard, Marketplace (shop+spin), Rooms; wired to backend with offline fallback |
+
+### Run the full stack
+`ash
+npm install
+npm run dev -w backend     # API on :8080
+npm run dev -w apps        # UI on :5173, proxy /api -> :8080
+node scripts/e2e-test.mjs  # backend economy e2e smoke test (26 checks)
+`
+
+### Economy model (off-chain mirror of on-chain ArcadeBank)
+- Play fee 1 ARCFT -> 5% house cut + 95% winner pool.
+- Beating the champion micro-pays them the pool.
+- Rooms: entry-fee escrow on create/join, settle = rank players + house cut + winner payout.
+- Marketplace: skins/cosmetics + spin wheel.

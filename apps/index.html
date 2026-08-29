@@ -8,60 +8,136 @@
   </head>
   <body>
     <div id="app">
+      <!-- ======================= TOP BAR ======================= -->
       <header class="topbar">
         <div class="logo">🎮 ARCFT <span>Arcade</span></div>
         <div class="wallet">
-          <span id="coinBalance" class="coin-badge">₵ 0</span>
+          <span id="coinBalance" class="coin-badge">₵ 0.00</span>
+          <span id="spinBadge" class="spin-badge" title="Marketplace spins">🎡 3</span>
           <button id="walletBtn" class="btn ghost">Connect Wallet</button>
         </div>
       </header>
 
-      <!-- ============================= VIEW: LOBBY ============================= -->
-      <main id="view-lobby" class="view active">
-        <section class="hero">
-          <h1 class="neon-title">ARCADE ON CREDITCOIN</h1>
-          <p class="subtitle">Every score is cryptographically verified on-chain via the <strong>Attestcoin Protocol</strong>. Play, climb the leaderboard, win ARCFT.</p>
-        </section>
+      <!-- ======================= NAV ======================= -->
+      <nav class="nav">
+        <button class="nav-btn active" data-view="play">🎮 Play</button>
+        <button class="nav-btn" data-view="leaderboard">🏆 Leaderboard</button>
+        <button class="nav-btn" data-view="market">🛍️ Marketplace</button>
+        <button class="nav-btn" data-view="rooms">🕹️ Rooms</button>
+      </nav>
 
+      <!-- ======================= VIEW: PLAY ======================= -->
+      <main id="view-play" class="view active">
+        <div class="hero">
+          <h1 class="neon-title">ARCADE ON CREDITCOIN</h1>
+          <p class="subtitle">Every score is <strong>cryptographically verified on-chain</strong> via the Attestcoin Protocol. Play, climb, win ARCFT.</p>
+        </div>
+        <section class="stats-row" id="statsRow"></section>
         <section class="game-grid">
           <div class="game-card" data-game="fruit-merge">
             <div class="game-art fruit-art">🍒</div>
             <h3>Fruit Merge</h3>
             <p>Drop fruit, merge to 7 tiers. Top tier <strong>CLEARS</strong>. Max the bowl.</p>
-            <button class="btn primary">Play →</button>
+            <div class="card-foot">
+              <span class="fee">₵1 / play</span>
+              <button class="btn primary">Play →</button>
+            </div>
           </div>
           <div class="game-card" data-game="nutty-rider">
             <div class="game-art rider-art">🏍️</div>
             <h3>Nutty Rider</h3>
             <p>Tilt-control biker. Dodge fans, logs & oil. Go the distance.</p>
-            <button class="btn primary">Play →</button>
+            <div class="card-foot">
+              <span class="fee">₵1 / play</span>
+              <button class="btn primary">Play →</button>
+            </div>
           </div>
         </section>
-
-        <section class="panels">
-          <div class="panel">
-            <h3>🏆 Global Leaderboard</h3>
-            <ul id="globalLeaderboard" class="leaderboard"><li class="muted">No scores yet — be first!</li></ul>
-          </div>
-          <div class="panel">
-            <h3>🕹️ Rooms</h3>
-            <div class="rooms-toolbar">
-              <button id="createRoomBtn" class="btn small">+ Create Room</button>
-              <span id="roomsStatus" class="muted small"></span>
-            </div>
-            <ul id="roomList" class="room-list"><li class="muted">No rooms yet.</li></ul>
+        <section class="panel">
+          <h3>🎯 How the economy works</h3>
+          <div class="economy-grid">
+            <div class="eco-item"><span class="eco-em">₵</span> <div><strong>Play fee</strong><span>1 ARCFT per run — split</span></div></div>
+            <div class="eco-item"><span class="eco-em">🏛️</span> <div><strong>House cut</strong><span>5% funds the arcade</span></div></div>
+            <div class="eco-item"><span class="eco-em">🥇</span> <div><strong>Winner pool</strong><span>beaten scores pay the champ</span></div></div>
+            <div class="eco-item"><span class="eco-em">🔗</span> <div><strong>Attestcoin</strong><span>every result verified on-chain</span></div></div>
           </div>
         </section>
       </main>
 
-      <!-- ============================= VIEW: GAME ============================= -->
+      <!-- ======================= VIEW: LEADERBOARD ======================= -->
+      <main id="view-leaderboard" class="view">
+        <div class="view-head">
+          <h2>🏆 Global Leaderboard</h2>
+          <div class="seg">
+            <button class="seg-btn active" data-lb="all">All</button>
+            <button class="seg-btn" data-lb="1">🍒 Fruit Merge</button>
+            <button class="seg-btn" data-lb="2">🏍️ Nutty Rider</button>
+          </div>
+        </div>
+        <div class="panel">
+          <ul id="lbList" class="leaderboard big"></ul>
+        </div>
+      </main>
+
+      <!-- ======================= VIEW: MARKETPLACE ======================= -->
+      <main id="view-market" class="view">
+        <div class="view-head">
+          <h2>🛍️ Marketplace</h2>
+          <button id="spinWheelBtn" class="btn gold">🎡 Spin Wheel <span id="spinCount">(3)</span></button>
+        </div>
+
+        <div id="spinResult" class="spin-result hidden"></div>
+
+        <section class="panel">
+          <h3>Shop</h3>
+          <div id="shopGrid" class="shop-grid"></div>
+        </section>
+      </main>
+
+      <!-- ======================= VIEW: ROOMS ======================= -->
+      <main id="view-rooms" class="view">
+        <div class="view-head">
+          <h2>🕹️ Rooms</h2>
+          <button id="openCreateRoom" class="btn gold">+ Create Room</button>
+        </div>
+
+        <!-- Create room form -->
+        <div id="roomForm" class="panel hidden">
+          <h3>Create a room</h3>
+          <div class="form-row">
+            <label>Game
+              <select id="rmGame"><option value="1">🍒 Fruit Merge</option><option value="2">🏍️ Nutty Rider</option></select>
+            </label>
+            <label>Entry fee (ARCFT)
+              <input id="rmFee" type="number" min="1" value="5" />
+            </label>
+            <label>Duration (sec)
+              <input id="rmDur" type="number" min="30" value="120" />
+            </label>
+            <label>Max players
+              <input id="rmMax" type="number" min="2" max="16" value="4" />
+            </label>
+            <button id="btnCreateRoom" class="btn primary">Create</button>
+            <button id="btnCancelRoom" class="btn ghost">Cancel</button>
+          </div>
+        </div>
+
+        <section class="panel">
+          <h3>Open rooms</h3>
+          <ul id="roomList" class="room-list"></ul>
+          <p id="roomEmpty" class="muted">No open rooms yet — create one or check back!</p>
+        </section>
+      </main>
+
+      <!-- ======================= VIEW: GAME (canvas) ======================= -->
       <main id="view-game" class="view">
         <div class="game-header">
-          <button id="backBtn" class="btn ghost small">← Lobby</button>
+          <button id="backBtn" class="btn ghost small">← All Games</button>
           <h2 id="gameTitle">Game</h2>
           <div id="gameScore" class="score-badge">0</div>
         </div>
-        <div id="gameCanvasWrap" class="canvas-wrap">
+        <div id="characterPicker" class="char-picker hidden"></div>
+        <div class="canvas-wrap">
           <canvas id="gameCanvas"></canvas>
         </div>
         <div id="gameOverlay" class="overlay hidden">
@@ -70,7 +146,7 @@
             <p id="ovScore" class="big-score">0</p>
             <p id="ovDetail" class="muted"></p>
             <button id="ovRestart" class="btn primary">Play Again</button>
-            <button id="ovLobby" class="btn ghost">Lobby</button>
+            <button id="ovLobby" class="btn ghost">All Games</button>
           </div>
         </div>
       </main>
