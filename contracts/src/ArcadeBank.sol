@@ -19,6 +19,9 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 contract ArcadeBank is Ownable {
     ARCFT public immutable arcft;
 
+    /// @notice Engines (LeaderboardEngine/RoomEngine) granted settlement rights.
+    mapping(address => bool) public isOperator;
+
     /// @notice House cut in basis points (e.g. 500 = 5%).
     uint256 public houseCutBps = 500;
     /// @notice Bounds for houseCutBps.
@@ -40,6 +43,14 @@ contract ArcadeBank is Ownable {
     event FeesCollected(address indexed player, uint256 gross, uint256 house, uint256 toPool);
     event Payout(address indexed recipient, uint256 amount, uint8 engine); // 0=global 1=room
     event HouseWithdrawn(address indexed operator, uint256 amount);
+    event OperatorSet(address indexed addr, bool enabled);
+
+    error NotOperator();
+
+    modifier onlyOperator() {
+        if (!isOperator[msg.sender] && msg.sender != owner()) revert NotOperator();
+        _;
+    }
 
     modifier onlyFundedEngine() {
         // Engines (LeaderboardEngine/RoomEngine) are granted as operators later;
@@ -49,6 +60,11 @@ contract ArcadeBank is Ownable {
 
     constructor(address arcft_) Ownable(msg.sender) {
         arcft = ARCFT(arcft_);
+    }
+
+    function setOperator(address operator_, bool enabled) external onlyOwner {
+        isOperator[operator_] = enabled;
+        emit OperatorSet(operator_, enabled);
     }
 
     function setHouseCut(uint256 bps) external onlyOwner {
@@ -62,7 +78,7 @@ contract ArcadeBank is Ownable {
      * @param from   Player paying the entry fee (in ARCFT).
      * @param gross  Total entry fee in ARCFT base units.
      */
-    function collectEntryFee(address from, uint256 gross) external {
+    function collectEntryFee(address from, uint256 gross) external onlyOperator {
         if (gross == 0) revert ZeroAmount();
         uint256 house = (gross * houseCutBps) / 10000;
         uint256 toPool = gross - house;
@@ -79,7 +95,7 @@ contract ArcadeBank is Ownable {
      * @notice Pay a winner from the winnings pool (ARCFT held by the bank).
      * @param engine 0 = global leaderboard payout, 1 = room settlement payout.
      */
-    function payWinner(address recipient, uint256 amount, uint8 engine) external onlyOwner {
+    function payWinner(address recipient, uint256 amount, uint8 engine) external onlyOperator {
         if (amount == 0) revert ZeroAmount();
         if (amount > winningsPool) revert InsufficientWinningsPool(amount, winningsPool);
         winningsPool -= amount;
