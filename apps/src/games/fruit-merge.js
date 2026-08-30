@@ -492,8 +492,9 @@ export class FruitMerge {
     ctx.closePath();
     ctx.fillStyle = "rgba(99,102,241,0.10)";
     ctx.fill();
-    ctx.strokeStyle = "#3f4356";
-    ctx.lineWidth = 3;
+    // faint neutral border (no colored/red outline — just defines the glass)
+    ctx.strokeStyle = "rgba(139,147,163,0.28)";
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     // subtle inner grid (play area texture)
@@ -521,14 +522,8 @@ export class FruitMerge {
     ctx.arc(jx + jw, jy + jh * 0.30, jw * 0.10, -Math.PI / 2, Math.PI / 2);
     ctx.stroke();
 
-    // blade + motor base at the very bottom
+    // blade + motor base (neutral dark casing, no bright outline line)
     const bladeY = baseY - 10;
-    ctx.strokeStyle = "#6366f1";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(jx + jw * 0.18, bladeY);
-    ctx.lineTo(jx + jw * 0.82, bladeY);
-    ctx.stroke();
     ctx.fillStyle = "#1b202a";
     ctx.beginPath();
     ctx.roundRect(jx + jw * 0.12, bladeY - 6, jw * 0.76, 16, 6);
