@@ -41,13 +41,15 @@ export class FruitMerge {
     this.onEnd = onEnd || (() => {});
     this.running = false;
     this.t = 0; // runtime seconds (for spawn grace)
+    this.juice = 0.08; // juice fill fraction (rises = difficulty)
 
     // jar geometry
     this.W = 0;
     this.H = 0;
     this.jar = null;    // { x, y, w, h } outer jar
     this.inner = null;  // { x, y, w, h } play area inside the jar
-    this.rimY = 0;      // danger / overflow line (near the top opening)
+    this.rimY = 0;      // rim opening Y (top) — where fruits drop in
+    this.crushY = 0;    // kill line: overflow when the pile passes this
 
     this.fruits = [];
     this.currentTier = 1;
@@ -90,8 +92,15 @@ export class FruitMerge {
       w: this.jar.w - (t + 6) * 2,
       h: this.jar.h - rim - base - 20,
     };
-    this.rimY = this.inner.y - 6;          // overflow line at the jar rim
+    this.rimY = this.inner.y - 6;          // rim opening (top)
+    this.crushY = this.inner.y + this.inner.h * 0.88; // kill line near the top
     this.spawnX = this.inner.x + this.inner.w / 2;
+  }
+
+  /** The physics floor = the top of the rising juice (liquid rides up). */
+  _floorY() {
+    const { y: iy, h: ih } = this.inner;
+    return iy + ih * Math.max(0.10, Math.min(0.92, this.juice));
   }
 
   _bind() {
@@ -120,6 +129,7 @@ export class FruitMerge {
     this.score = 0;
     this.mergeCount = 0;
     this.blendCount = 0;
+    this.juice = 0.10;
     this.unlocked = new Set([1, 2]);
     this.currentTier = 1;
     this.t = 0;
@@ -224,7 +234,7 @@ export class FruitMerge {
   // ---------------------------------------------------------------- physics
   _step(dt) {
     const { x: ix, y: iy, w, h } = this.inner;
-    const floor = iy + h;
+    const floor = this._floorY(); // top of the rising juice
 
     for (const f of this.fruits) {
       if (f.dead) continue;
@@ -234,7 +244,8 @@ export class FruitMerge {
 
       if (f.x - f.r < ix) { f.x = ix + f.r; f.vx *= -0.3; }
       if (f.x + f.r > ix + w) { f.x = ix + w - f.r; f.vx *= -0.3; }
-      if (f.y + f.r > floor) { f.y = floor - f.r; f.vy *= -0.28; }
+      // rising juice = the floor; clamp onto it (no sinking, no bouncing up)
+      if (f.y + f.r > floor) { f.y = floor - f.r; f.vy = Math.min(f.vy, 0); }
     }
 
     for (let pass = 0; pass < ROUNDS; pass++) {
@@ -278,11 +289,12 @@ export class FruitMerge {
 
     this.fruits = this.fruits.filter((f) => !f.dead);
 
-    // overflow: only fruits PAST their spawn grace and at rest above the rim
+    // overflow: anything at rest that gets pushed up past the kill line
+    // pops out the top opening. Grace period hides fresh spawns.
     for (const f of this.fruits) {
       const pastGrace = this.t - f.born > SPAWN_GRACE;
-      if (pastGrace && f.y - f.r < this.rimY && Math.abs(f.vy) < 26) {
-        this._end();
+      if (pastGrace && f.y - f.r < this.crushY && Math.abs(f.vy) < 30) {
+        this._end("OVERSIZED!");
         return;
       }
     }
@@ -295,7 +307,18 @@ export class FruitMerge {
     this._last = now;
     this.t += dt;
 
+    // ---- difficulty: the juice rises over time, faster as you score ----
+    // early ~70s of room, tightening to ~20s as your score climbs
+    const rate = Math.min(0.05, 0.012 + this.score * 0.00002);
+    this.juice = Math.min(0.93, this.juice + dt * rate);
+
     this._step(dt);
+
+    // juice full => blender overflowed
+    if (this.juice >= 0.93) {
+      this._end("BLENDER FULL!");
+      return;
+    }
 
     // unblock dropping once the last fruit has fallen clear of the rim
     if (this.dropLocked) {
@@ -309,10 +332,11 @@ export class FruitMerge {
     if (!this.gameOver) requestAnimationFrame((t) => this._loop(t));
   }
 
-  _end() {
+  _end(reason = "") {
     if (this.gameOver) return;
     this.gameOver = true;
     this.running = false;
+    this.endReason = reason;
     const bonus = this.fruits.reduce((s, f) => s + (f.dead ? 0 : 10 * f.tier), 0);
     this.score += bonus;
     this.onScore(this.score);
@@ -409,15 +433,32 @@ export class FruitMerge {
     ctx.textAlign = "center";
     ctx.fillText("🍉 WATERMELON BLENDER", jx + jw / 2, jy + jh - 16);
 
-    // overflow / danger line at the rim opening
-    ctx.strokeStyle = "rgba(239,68,68,0.45)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 8]);
+    // --- rising JUICE (the liquid floor / difficulty meter) ---
+    const juiceTop = this._floorY();
+    ctx.fillStyle = "rgba(52,211,153,0.22)";
     ctx.beginPath();
-    ctx.moveTo(this.inner.x, this.rimY);
-    ctx.lineTo(this.inner.x + this.inner.w, this.rimY);
+    ctx.moveTo(jx + taper, juiceTop);
+    ctx.lineTo(jx + jw - taper, juiceTop);
+    ctx.lineTo(jx + jw - taper, baseY);
+    ctx.lineTo(jx + taper, baseY);
+    ctx.closePath();
+    ctx.fill();
+    // liquid surface line
+    ctx.strokeStyle = "rgba(52,211,153,0.5)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(jx + taper, juiceTop);
+    ctx.lineTo(jx + jw - taper, juiceTop);
     ctx.stroke();
-    ctx.setLineDash([]);
+    // a few bubbles just under the surface
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    for (let b = 0; b < 6; b++) {
+      const bx2 = jx + jw * (0.2 + 0.6 * (((b * 37) % 100) / 100));
+      const by2 = juiceTop + 12 + ((b * 53) % 40);
+      ctx.beginPath();
+      ctx.arc(bx2, by2, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // --- fruits ---
     for (const f of this.fruits) {
@@ -509,7 +550,20 @@ export class FruitMerge {
     ctx.font = "12px sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(`MERGES ${this.mergeCount}  ·  BLENDS ${this.blendCount}`, 12, 14);
+    // juice fill gauge (pressure / difficulty meter)
+    const gW = 90, gH = 8;
+    const gx = W - gW - 12, gy = 16;
+    ctx.fillStyle = "#1b202a";
+    ctx.fillRect(gx, gy, gW, gH);
+    const fill = Math.max(0, Math.min(1, this.juice));
+    ctx.fillStyle = fill > 0.8 ? "#ef4444" : "#34d399";
+    ctx.fillRect(gx, gy, gW * fill, gH);
+    ctx.strokeStyle = "#262c38";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(gx, gy, gW, gH);
+    ctx.fillStyle = "#8b93a3";
+    ctx.font = "10px sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(`UNLOCKED ${this.unlocked.size}/${FRUITS.length - 1}`, W - 12, 14);
+    ctx.fillText(`FILL ${Math.round(fill * 100)}%`, W - 12, gy + gH + 12);
   }
 }
