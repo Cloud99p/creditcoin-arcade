@@ -13,19 +13,30 @@
  */
 
 // radius as a fraction of the JAR's inner width (play container).
-// ax/ay = shape of the fruit's collision profile relative to its base radius:
-// ax>1 => wide (watermelon, strawberry), ay>1 => tall (pear, apple).
-// Distinct shapes mean fruits CATCH on their real outlines instead of
-// sliding around each other — keeping that friction is where the difficulty lives.
+// poly = the fruit's REAL collision silhouette as a normalized convex polygon
+// (vertices scaled by r*w, half-extent ~1). Pears are tall with a narrow neck,
+// watermelons wide, strawberries wide with a pointy top... so neighbours
+// CATCH on the actual fruit outline instead of sliding around a circle. That
+// interlocking is what makes every drop need thought and separates skill.
 export const FRUITS = [
-  { tier: 1, name: "Cherry",     emoji: "🍒", r: 0.055, ax: 1.10, ay: 0.95, pts: 10,  color: "#f87171" },
-  { tier: 2, name: "Strawberry", emoji: "🍓", r: 0.075, ax: 1.22, ay: 0.88, pts: 20,  color: "#fb7185" },
-  { tier: 3, name: "Grape",      emoji: "🍇", r: 0.100, ax: 1.18, ay: 1.05, pts: 40,  color: "#8e7cc3" },
-  { tier: 4, name: "Orange",     emoji: "🍊", r: 0.132, ax: 1.00, ay: 1.00, pts: 80,  color: "#fbbf24" },
-  { tier: 5, name: "Apple",      emoji: "🍎", r: 0.172, ax: 0.94, ay: 1.12, pts: 160, color: "#f43f5e" },
-  { tier: 6, name: "Pear",       emoji: "🍐", r: 0.220, ax: 0.82, ay: 1.34, pts: 320, color: "#4ade80" },
-  { tier: 7, name: "Watermelon", emoji: "🍉", r: 0.280, ax: 1.42, ay: 0.90, pts: 640, color: "#22c55e" },
+  { tier: 1, name: "Cherry",     emoji: "🍒", r: 0.055, pts: 10,  color: "#f87171", poly: oct(1.10, 0.95) },
+  { tier: 2, name: "Strawberry", emoji: "🍓", r: 0.075, pts: 20,  color: "#fb7185", poly: [[0, -1.05], [1.05, -0.2], [0.9, 0.85], [0, 1.0], [-0.9, 0.85], [-1.05, -0.2]] },
+  { tier: 3, name: "Grape",      emoji: "🍇", r: 0.100, pts: 40,  color: "#8e7cc3", poly: oct(1.05, 1.05) },
+  { tier: 4, name: "Orange",     emoji: "🍊", r: 0.132, pts: 80,  color: "#fbbf24", poly: oct(1.0, 1.0) },
+  { tier: 5, name: "Apple",      emoji: "🍎", r: 0.172, pts: 160, color: "#f43f5e", poly: [[0.9, -0.25], [0.5, -1.05], [-0.5, -1.05], [-0.9, -0.25], [-0.65, 0.9], [0, 1.1], [0.65, 0.9]] },
+  { tier: 6, name: "Pear",       emoji: "🍐", r: 0.220, pts: 320, color: "#4ade80", poly: [[0.32, -1.12], [0.88, -0.5], [0.85, 0.15], [0.45, 0.78], [0, 1.05], [-0.45, 0.78], [-0.85, 0.15], [-0.88, -0.5], [-0.32, -1.12]] },
+  { tier: 7, name: "Watermelon", emoji: "🍉", r: 0.280, pts: 640, color: "#22c55e", poly: [[-1.3, 0], [-1.05, 1.0], [0, 1.28], [1.05, 1.0], [1.3, 0], [1.05, -1.0], [0, -1.28], [-1.05, -1.0]] },
 ];
+
+// build a rounded polygon (octagon) for round-ish fruits; sx/sy squash it
+function oct(sx, sy) {
+  const p = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    p.push([Math.cos(a) * sx, Math.sin(a) * sy]);
+  }
+  return p;
+}
 
 const GRAVITY = 1250;        // px/s^2
 const DAMPING = 0.80;        // collision impulse damping
@@ -45,7 +56,6 @@ export class FruitMerge {
     this.onEnd = onEnd || (() => {});
     this.running = false;
     this.t = 0; // runtime seconds (for spawn grace)
-    this.juice = 0.08; // juice fill fraction (rises = difficulty)
 
     // jar geometry
     this.W = 0;
@@ -53,7 +63,8 @@ export class FruitMerge {
     this.jar = null;    // { x, y, w, h } outer jar
     this.inner = null;  // { x, y, w, h } play area inside the jar
     this.rimY = 0;      // rim opening Y (top) — where fruits drop in
-    this.crushY = 0;    // kill line: overflow when the pile passes this
+    this.bottomY = 0;   // static floor: fruits rest on the jar base
+    this.crushY = 0;    // kill line: overflow when a settled fruit sits above it
 
     this.fruits = [];
     this.currentTier = 1;
@@ -97,19 +108,24 @@ export class FruitMerge {
       h: this.jar.h - rim - base - 20,
     };
     this.rimY = this.inner.y - 6;          // rim opening (top)
-    // kill line sits just under the rim: the run ends when the settled pile
-    // (or the juice as it fills) pushes a fruit up here.
+    this.bottomY = this.inner.y + this.inner.h; // static floor (jar base)
+    // kill line sits just under the rim: the run ends when a truly-settled
+    // fruit is pushed up here — poor placements pile up and overflow.
     this.crushY = this.inner.y + this.inner.h * 0.12;
     this.spawnX = this.inner.x + this.inner.w / 2;
   }
 
-  /** Physics floor = top of the juice. Juice fills from the BOTTOM upward,
-   *  so a low fraction leaves most of the jar empty. 0 => jar empty,
-   *  0.93 => liquid nearly at the rim. */
-  _floorY() {
-    const { y: iy, h: ih } = this.inner;
-    const f = Math.max(0.05, Math.min(0.93, this.juice));
-    return (iy + ih) - ih * f;
+  /** World-space polygon vertices for a fruit, from its normalized silhouette.
+   *  Rebuilt each physics step from the fruit's current position/scale. */
+  _polyPts(f) {
+    const { w } = this.inner;
+    const s = f.r * w; // scale factor
+    if (!f.polyPts) f.polyPts = new Array(f.poly.length);
+    for (let i = 0; i < f.poly.length; i++) {
+      f.polyPts[i][0] = f.x + f.poly[i][0] * s;
+      f.polyPts[i][1] = f.y + f.poly[i][1] * s;
+    }
+    return f.polyPts;
   }
 
   _bind() {
@@ -128,8 +144,11 @@ export class FruitMerge {
   _clampX(x) {
     const { x: ix, w } = this.inner;
     const s = FRUITS[this.currentTier - 1];
-    const rx = s.r * s.ax * w;
-    return Math.min(Math.max(x, ix + rx + 4), ix + w - rx - 4);
+    // furthest |x| vertex = widest half-extent (keeps the fruit inside walls)
+    let hw = s.r;
+    for (const [vx] of s.poly) hw = Math.max(hw, Math.abs(vx) * s.r);
+    const px = hw * w;
+    return Math.min(Math.max(x, ix + px + 4), ix + w - px - 4);
   }
 
   // ------------------------------------------------------------- public API
@@ -139,7 +158,6 @@ export class FruitMerge {
     this.score = 0;
     this.mergeCount = 0;
     this.blendCount = 0;
-    this.juice = 0.10;
     this.unlocked = new Set([1, 2]);
     this.currentTier = 1;
     this.t = 0;
@@ -183,13 +201,15 @@ export class FruitMerge {
 
     const { w } = this.inner;
     const spec = FRUITS[this.currentTier - 1];
-    const rx = spec.r * spec.ax * w;
-    const ry = spec.r * spec.ay * w;
+    const r = spec.r * w;
+    // furthest negative-Y vertex = top of the silhouette (for spawn height)
+    let top = 0;
+    for (const [, vy] of spec.poly) top = Math.min(top, vy);
     // spawn just above the rim so it visibly drops IN, with spawn grace
     this.fruits.push({
       tier: this.currentTier, x: this.spawnX,
-      y: this.rimY - ry - 4, rx, ry,
-      vx: 0, vy: 0,
+      y: this.rimY - top * r - 4, r,
+      poly: spec.poly, vx: 0, vy: 0,
       emoji: spec.emoji, color: spec.color, pts: spec.pts,
       born: this.t, dead: false, ignore: 0,
     });
@@ -203,8 +223,7 @@ export class FruitMerge {
     const { w } = this.inner;
     const nextTier = a.tier + 1;
     const target = FRUITS[nextTier - 1];
-    const rx = target.r * target.ax * w;
-    const ry = target.r * target.ay * w;
+    const r = target.r * w;
 
     this.fruits[aIdx].dead = true;
     this.fruits[bIdx].dead = true;
@@ -219,14 +238,14 @@ export class FruitMerge {
       this.score += 1000;
       this.onScore(this.score);
       const { x: ix, w: iw } = this.inner;
-      this.blendFx = { t: 1.2, x: ix + iw / 2, y: this.inner.y + this.inner.h * 0.4, r: rx };
+      this.blendFx = { t: 1.2, x: ix + iw / 2, y: this.inner.y + this.inner.h * 0.4, r };
       this._blendClear();
       return;
     }
 
     this.fruits.push({
-      tier: nextTier, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, rx, ry,
-      vx: (a.vx + b.vx) / 2, vy: Math.min(a.vy, b.vy) * 0.5,
+      tier: nextTier, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r,
+      poly: target.poly, vx: (a.vx + b.vx) / 2, vy: Math.min(a.vy, b.vy) * 0.5,
       emoji: target.emoji, color: target.color, pts: target.pts,
       born: this.t, dead: false, ignore: 6,
     });
@@ -238,8 +257,8 @@ export class FruitMerge {
     for (const f of this.fruits) {
       if (f.dead) continue;
       f.y = iy + (f.y - iy) * 0.72;
-      f.rx *= 0.96;
-      f.ry *= 0.96;
+      f.r *= 0.96;
+      f.polyPts = null;
       f.vy = 0;
     }
   }
@@ -248,21 +267,92 @@ export class FruitMerge {
   // Ellipse-ellipse collision: each fruit keeps its real shape (rx/ry half
   // axes), so grapes are wide, pears are tall, etc. Neighbours CATCH on their
   // outlines instead of sliding around perfect circles — that friction is the
-  // actual difficulty and the reason the leaderboard has a spread.
+  /** SAT: if two convex polygons overlap, return the min overlap + normal.
+   *  Null when they don't collide. Axes come from both polygons' edges. */
+  _sat(aPts, bPts) {
+    let bestOverlap = Infinity, bestNx = 0, bestNy = 0;
+    const axes = [];
+    for (const pts of [aPts, bPts]) {
+      for (let i = 0; i < pts.length; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % pts.length];
+        let ex = p2[0] - p1[0];
+        let ey = p2[1] - p1[1];
+        axes.push([-ey, ex]); // edge normal
+      }
+    }
+    for (const [nx, ny] of axes) {
+      const len = Math.hypot(nx, ny) || 1;
+      const ux = nx / len, uy = ny / len;
+      let aMin = Infinity, aMax = -Infinity;
+      for (const p of aPts) {
+        const d = p[0] * ux + p[1] * uy;
+        if (d < aMin) aMin = d;
+        if (d > aMax) aMax = d;
+      }
+      let bMin = Infinity, bMax = -Infinity;
+      for (const p of bPts) {
+        const d = p[0] * ux + p[1] * uy;
+        if (d < bMin) bMin = d;
+        if (d > bMax) bMax = d;
+      }
+      const overlap = Math.min(aMax, bMax) - Math.max(aMin, bMin);
+      if (overlap < 0) return null; // separating axis found
+      if (overlap < bestOverlap) { bestOverlap = overlap; bestNx = ux; bestNy = uy; }
+    }
+    // point the normal from a toward b
+    const cx = (bPts[0][0] + bPts[2][0]) / 2 - (aPts[0][0] + aPts[2][0]) / 2;
+    const cy = (bPts[0][1] + bPts[2][1]) / 2 - (aPts[0][1] + aPts[2][1]) / 2;
+    if (cx * bestNx + cy * bestNy < 0) { bestNx = -bestNx; bestNy = -bestNy; }
+    return { overlap: bestOverlap, nx: bestNx, ny: bestNy };
+  }
+
+  /** lowest vertex (max Y) of a fruit's silhouette — used for floor contact. */
+  _lowY(f) {
+    let y = -Infinity;
+    for (const [, vy] of f.poly) y = Math.max(y, vy);
+    return y * (f.r * this.inner.w) + f.y;
+  }
+
+  _topY(f) {
+    let y = Infinity;
+    for (const [, vy] of f.poly) y = Math.min(y, vy);
+    return y * (f.r * this.inner.w) + f.y;
+  }
+
+  /** widest horizontal half-extent in px — keeps fruits inside the walls. */
+  _halfW(f) {
+    let hw = 0;
+    for (const [vx] of f.poly) hw = Math.max(hw, Math.abs(vx));
+    return hw * (f.r * this.inner.w);
+  }
+
+  /** Polygon-shape collision. Fruits carry their REAL silhouette (poly), so
+   *  pears, watermelons and strawberries interlock on their true outlines.
+   *  Friction makes a dropped fruit stick where it lands — no free-sliding
+   *  into a perfect merge — so every drop needs placement thought. */
   _step(dt) {
-    const { x: ix, y: iy, w, h } = this.inner;
-    const floor = this._floorY(); // top of the rising juice
+    const { x: ix, w } = this.inner;
+    const floor = this.bottomY;
 
     for (const f of this.fruits) {
       if (f.dead) continue;
       f.vy += GRAVITY * dt;
       f.x += f.vx * dt;
       f.y += f.vy * dt;
+      f.contact = false;
 
-      if (f.x - f.rx < ix) { f.x = ix + f.rx; f.vx *= -0.3; }
-      if (f.x + f.rx > ix + w) { f.x = ix + w - f.rx; f.vx *= -0.3; }
-      // rising juice = the floor; clamp onto it (no sinking, no bouncing up)
-      if (f.y + f.ry > floor) { f.y = floor - f.ry; f.vy = Math.min(f.vy, 0); }
+      // walls
+      const hw = this._halfW(f);
+      if (f.x - hw < ix) { f.x = ix + hw; f.vx *= -0.25; }
+      if (f.x + hw > ix + w) { f.x = ix + w - hw; f.vx *= -0.25; }
+      // static floor
+      if (this._lowY(f) > floor) {
+        f.foot = true;
+        f.y -= this._lowY(f) - floor;
+        f.vy = Math.min(f.vy, 0);
+        f.contact = true;
+      }
     }
 
     for (let pass = 0; pass < ROUNDS; pass++) {
@@ -271,36 +361,30 @@ export class FruitMerge {
           const a = this.fruits[i];
           const b = this.fruits[j];
           if (a.dead || b.dead) continue;
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const dist = Math.hypot(dx, dy) || 0.0001;
-          const ux = dx / dist;
-          const uy = dy / dist;
 
-          // effective radius of each ellipse along the contact direction
-          const ra = (a.rx * a.ry) / Math.sqrt((a.ry * ux) ** 2 + (a.rx * uy) ** 2);
-          const rb = (b.rx * b.ry) / Math.sqrt((b.ry * ux) ** 2 + (b.rx * uy) ** 2);
-          const touch = ra + rb;
-          if (dist >= touch) continue;
+          const hit = this._sat(this._polyPts(a), this._polyPts(b));
+          if (!hit) continue;
 
-          // merge check uses mean radius so equal-shape fruits combine
-          const sizeA = (a.rx + a.ry) / 2;
-          const sizeB = (b.rx + b.ry) / 2;
-          if (a.tier === b.tier && Math.abs(sizeA - sizeB) / Math.max(sizeA, sizeB) < MERGE_EPS && a.ignore <= 0 && b.ignore <= 0) {
+          // merge equal tiers that overlap (they touch => they fuse).
+          // Tiny epsilon avoids jitter-fusing at the exact boundary.
+          if (a.tier === b.tier && hit.overlap > 1 && a.ignore <= 0 && b.ignore <= 0) {
             this._merge(i, j);
             continue;
           }
 
-          const overlap = touch - dist;
-          const push = overlap / 2;
-          a.x -= ux * push; a.y -= uy * push;
-          b.x += ux * push; b.y += uy * push;
+          a.contact = true;
+          b.contact = true;
+          const ox = hit.nx * hit.overlap * 0.5;
+          const oy = hit.ny * hit.overlap * 0.5;
+          a.x -= ox; a.y -= oy;
+          b.x += ox; b.y += oy;
 
-          const dot = (b.vx - a.vx) * ux + (b.vy - a.vy) * uy;
-          if (dot < 0) {
-            const imp = -dot * DAMPING;
-            a.vx -= imp * ux; a.vy -= imp * uy;
-            b.vx += imp * ux; b.vy += imp * uy;
+          // impulse along the collision normal (restitution = damping)
+          const rel = (b.vx - a.vx) * hit.nx + (b.vy - a.vy) * hit.ny;
+          if (rel < 0) {
+            const j = -rel * (1 + DAMPING) * 0.5;
+            a.vx -= j * hit.nx; a.vy -= j * hit.ny;
+            b.vx += j * hit.nx; b.vy += j * hit.ny;
           }
         }
       }
@@ -308,16 +392,26 @@ export class FruitMerge {
 
     for (const f of this.fruits) if (f.ignore > 0) f.ignore--;
 
+    // ---- friction: a fruit resting on something locks its lateral slide ----
+    for (const f of this.fruits) {
+      if (f.dead) continue;
+      if (f.contact) {
+        // stick fast once it comes to (near) rest against a surface
+        f.vx *= 0.55;
+        if (Math.abs(f.vy) < 40) f.vx *= 0.5; // stronger grip when nearly resting
+      }
+      // global air/rolling drag so piles calm quickly
+      f.vx *= 0.985;
+    }
+
     this.fruits = this.fruits.filter((f) => !f.dead);
 
-    // overflow: only a fruit that has TRULY SETTLED (both velocities ~0) and
-    // whose top gets pushed up past the kill line pops out the top opening.
-    // A fruit falling through the juice never triggers this — it must land
-    // and rest first, and even then only when the pile is genuinely near the rim.
+    // overflow: a fruit that has TRULY settled is only a threat if its top
+    // crosses the kill line near the rim. Falling fruits never trigger this.
     for (const f of this.fruits) {
       const pastGrace = this.t - f.born > SPAWN_GRACE;
       const atRest = Math.abs(f.vy) < 14 && Math.abs(f.vx) < 14;
-      if (pastGrace && atRest && f.y - f.ry < this.crushY) {
+      if (pastGrace && atRest && this._topY(f) < this.crushY) {
         this._end("OVERSIZED!");
         return;
       }
@@ -330,11 +424,6 @@ export class FruitMerge {
     const dt = Math.min((now - this._last) / 1000, 0.033);
     this._last = now;
     this.t += dt;
-
-    // ---- difficulty: the juice rises over time, faster as you score ----
-    // Early game ~2min of room, tightening toward ~30s as your score climbs.
-    const rate = Math.min(0.03, 0.006 + this.score * 0.00001);
-    this.juice = Math.min(0.93, this.juice + dt * rate * (1 + this.blendCount * 0.03));
 
     this._step(dt);
 
@@ -451,48 +540,18 @@ export class FruitMerge {
     ctx.textAlign = "center";
     ctx.fillText("🍉 WATERMELON BLENDER", jx + jw / 2, jy + jh - 16);
 
-    // --- rising JUICE (the liquid floor / difficulty meter) ---
-    const juiceTop = this._floorY();
-    ctx.fillStyle = "rgba(52,211,153,0.22)";
-    ctx.beginPath();
-    ctx.moveTo(jx + taper, juiceTop);
-    ctx.lineTo(jx + jw - taper, juiceTop);
-    ctx.lineTo(jx + jw - taper, baseY);
-    ctx.lineTo(jx + taper, baseY);
-    ctx.closePath();
-    ctx.fill();
-    // liquid surface line
-    ctx.strokeStyle = "rgba(52,211,153,0.5)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(jx + taper, juiceTop);
-    ctx.lineTo(jx + jw - taper, juiceTop);
-    ctx.stroke();
-    // a few bubbles just under the surface
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    for (let b = 0; b < 6; b++) {
-      const bx2 = jx + jw * (0.2 + 0.6 * (((b * 37) % 100) / 100));
-      const by2 = juiceTop + 12 + ((b * 53) % 40);
-      ctx.beginPath();
-      ctx.arc(bx2, by2, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // --- fruits ---
+    // --- fruits (drawn purely as their emoji silhouette, no boxes) ---
     for (const f of this.fruits) {
       if (f.dead) continue;
       this._drawFruit(f);
     }
 
-    // --- held fruit ghost + landing outline (matches its real shape) ---
+    // --- held fruit ghost + landing outline (its REAL polygon outline) ---
     if (!this.dropLocked && !this.gameOver) {
       const hold = FRUITS[this.currentTier - 1];
-      const w = this.inner.w;
-      const gx = hold.r * hold.ax * w;
-      const gy = hold.r * hold.ay * w;
+      const hr = hold.r * this.inner.w;
       ctx.globalAlpha = 0.85;
-      this._drawRing(this.spawnX, this.rimY - 30, gx, gy);
-      this._drawFruit({ x: this.spawnX, y: this.rimY - 30, rx: gx, ry: gy, color: hold.color, emoji: hold.emoji });
+      this._drawGhost({ x: this.spawnX, y: this.rimY - 30, r: hr, poly: hold.poly, emoji: hold.emoji });
       ctx.globalAlpha = 1;
     }
 
@@ -506,30 +565,41 @@ export class FruitMerge {
     this._drawHud(W);
   }
 
+  /** Draw a fruit as PURE emoji — no backing colour, no collision box.
+   *  The emoji is sized to the silhouette footprint so it matches physics. */
   _drawFruit(f) {
     const ctx = this.ctx;
-    // faint flat backing shaped like the fruit (NO ring/circle outline)
-    ctx.beginPath();
-    ctx.ellipse(f.x, f.y, Math.abs(f.rx), Math.abs(f.ry), 0, 0, Math.PI * 2);
-    ctx.fillStyle = f.color;
-    ctx.globalAlpha = 0.28;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    // emoji sized to the fruit's real footprint so it matches its physics
-    const emoji = Math.max(10, f.rx * 1.7);
-    ctx.font = `${emoji}px "Segoe UI Emoji", serif`;
+    // footprint ≈ bounding box of the polygon, scaled from r
+    const { w } = this.inner;
+    let hw = 0, hh = 0;
+    for (const [vx, vy] of f.poly) { hw = Math.max(hw, Math.abs(vx)); hh = Math.max(hh, Math.abs(vy)); }
+    const s = f.r * w;
+    const size = Math.max(10, Math.max(hw, hh) * s * 2.05);
+    ctx.font = `${size}px "Segoe UI Emoji", serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(f.emoji, f.x, f.y + 1);
   }
 
-  _drawRing(x, y, rx, ry) {
+  /** Held-fruit landing preview: the real polygon outline + emoji. */
+  _drawGhost(f) {
     const ctx = this.ctx;
+    const { w } = this.inner;
+    const s = f.r * w;
+    // polygon outline (the fruit's true silhouette)
     ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(139,147,163,0.55)";
-    ctx.lineWidth = 2;
+    for (let i = 0; i < f.poly.length; i++) {
+      const x = f.x + f.poly[i][0] * s;
+      const y = f.y + f.poly[i][1] * s;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = "rgba(139,147,163,0.6)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
+    ctx.fillStyle = "rgba(139,147,163,0.08)";
+    ctx.fill();
+    this._drawFruit(f);
   }
 
   _drawStream() {
@@ -571,20 +641,7 @@ export class FruitMerge {
     ctx.font = "12px sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(`MERGES ${this.mergeCount}  ·  BLENDS ${this.blendCount}`, 12, 14);
-    // juice fill gauge (pressure / difficulty meter)
-    const gW = 90, gH = 8;
-    const gx = W - gW - 12, gy = 16;
-    ctx.fillStyle = "#1b202a";
-    ctx.fillRect(gx, gy, gW, gH);
-    const fill = Math.max(0, Math.min(1, this.juice));
-    ctx.fillStyle = fill > 0.8 ? "#ef4444" : "#34d399";
-    ctx.fillRect(gx, gy, gW * fill, gH);
-    ctx.strokeStyle = "#262c38";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(gx, gy, gW, gH);
-    ctx.fillStyle = "#8b93a3";
-    ctx.font = "10px sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(`FILL ${Math.round(fill * 100)}%`, W - 12, gy + gH + 12);
+    ctx.fillText(`UNLOCKED ${this.unlocked.size}/${FRUITS.length - 1}`, W - 12, 14);
   }
 }

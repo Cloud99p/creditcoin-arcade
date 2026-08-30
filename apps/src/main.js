@@ -240,7 +240,12 @@ function finishGame(score) {
 function showOverlay() { $("#gameOverlay").classList.remove("hidden"); }
 function hideOverlay() { $("#gameOverlay").classList.add("hidden"); }
 $("#backBtn").addEventListener("click", () => { if (active?.runner) active.runner.running = false; showView("play"); renderView("play"); refreshWallet(); });
-$("#ovRestart").addEventListener("click", () => { if (active) startRunner(active.def, "pig"); });
+$("#ovRestart").addEventListener("click", () => {
+  if (!active) return;
+  if (active.runner) active.runner.running = false;
+  hideOverlay();
+  startRunner(active.def, "pig");
+});
 $("#ovLobby").addEventListener("click", () => { showView("play"); renderView("play"); refreshWallet(); });
 
 // --------------------------------------------------------------------------
