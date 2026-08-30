@@ -97,14 +97,19 @@ export class FruitMerge {
       h: this.jar.h - rim - base - 20,
     };
     this.rimY = this.inner.y - 6;          // rim opening (top)
-    this.crushY = this.inner.y + this.inner.h * 0.88; // kill line near the top
+    // kill line sits just under the rim: the run ends when the settled pile
+    // (or the juice as it fills) pushes a fruit up here.
+    this.crushY = this.inner.y + this.inner.h * 0.12;
     this.spawnX = this.inner.x + this.inner.w / 2;
   }
 
-  /** The physics floor = the top of the rising juice (liquid rides up). */
+  /** Physics floor = top of the juice. Juice fills from the BOTTOM upward,
+   *  so a low fraction leaves most of the jar empty. 0 => jar empty,
+   *  0.93 => liquid nearly at the rim. */
   _floorY() {
     const { y: iy, h: ih } = this.inner;
-    return iy + ih * Math.max(0.10, Math.min(0.92, this.juice));
+    const f = Math.max(0.05, Math.min(0.93, this.juice));
+    return (iy + ih) - ih * f;
   }
 
   _bind() {
@@ -305,11 +310,14 @@ export class FruitMerge {
 
     this.fruits = this.fruits.filter((f) => !f.dead);
 
-    // overflow: anything at rest that gets pushed up past the kill line
-    // pops out the top opening. Grace period hides fresh spawns.
+    // overflow: only a fruit that has TRULY SETTLED (both velocities ~0) and
+    // whose top gets pushed up past the kill line pops out the top opening.
+    // A fruit falling through the juice never triggers this — it must land
+    // and rest first, and even then only when the pile is genuinely near the rim.
     for (const f of this.fruits) {
       const pastGrace = this.t - f.born > SPAWN_GRACE;
-      if (pastGrace && f.y - f.ry < this.crushY && Math.abs(f.vy) < 30) {
+      const atRest = Math.abs(f.vy) < 14 && Math.abs(f.vx) < 14;
+      if (pastGrace && atRest && f.y - f.ry < this.crushY) {
         this._end("OVERSIZED!");
         return;
       }
@@ -324,17 +332,11 @@ export class FruitMerge {
     this.t += dt;
 
     // ---- difficulty: the juice rises over time, faster as you score ----
-    // early ~70s of room, tightening to ~20s as your score climbs
-    const rate = Math.min(0.05, 0.012 + this.score * 0.00002);
-    this.juice = Math.min(0.93, this.juice + dt * rate);
+    // Early game ~2min of room, tightening toward ~30s as your score climbs.
+    const rate = Math.min(0.03, 0.006 + this.score * 0.00001);
+    this.juice = Math.min(0.93, this.juice + dt * rate * (1 + this.blendCount * 0.03));
 
     this._step(dt);
-
-    // juice full => blender overflowed
-    if (this.juice >= 0.93) {
-      this._end("BLENDER FULL!");
-      return;
-    }
 
     // unblock dropping once the last fruit has fallen clear of the rim
     if (this.dropLocked) {
