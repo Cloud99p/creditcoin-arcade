@@ -245,9 +245,9 @@ export class FruitMerge {
     ctx.clearRect(0, 0, w, h);
 
     // bowl
-    ctx.fillStyle = "#0d1b2e";
-    ctx.strokeStyle = "#2c6ba0";
-    ctx.lineWidth = 3;
+    ctx.fillStyle = "#12151c";
+    ctx.strokeStyle = "#262c38";
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.roundRect(4, 4, w - 8, h - 8, 16);
     ctx.fill();
@@ -280,15 +280,11 @@ export class FruitMerge {
     const ctx = this.ctx;
     const base = (spec.size * this.bowlW) / 2;
     const r = base * scale;
-    // shadow/glow
-    ctx.save();
-    ctx.shadowColor = spec.color;
-    ctx.shadowBlur = 14;
+    // flat fruit (no glow)
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = spec.color;
     ctx.fill();
-    ctx.restore();
     // emoji on top
     const emojiSize = Math.max(10, r * 1.1);
     ctx.font = `${emojiSize}px serif`;

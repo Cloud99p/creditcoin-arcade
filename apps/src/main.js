@@ -132,11 +132,11 @@ async function doSpin() {
   const me = await api.getMe().catch(() => ({ spins: 0 }));
   $("#spinCount").textContent = `(${me.spins ?? 0})`;
   if (!r || !r.ok || !r.result) {
-    box.innerHTML = `<div class="spin-badge-result">🚫 ${r?.message || "No spins left — buy one or earn more!"} 🎡</div>`;
+    box.innerHTML = `<div class="spin-result-box">🚫 ${r?.message || "No spins left — buy one or earn more!"} 🎡</div>`;
   } else {
     let extra = "";
     if (r.creditAmount) extra = ` <span class="good">(+₵${(r.creditAmount / 1e6).toFixed(1)})</span>`;
-    box.innerHTML = `<div class="spin-badge-result">${r.result.emoji} ${r.result.label}${extra}</div>`;
+    box.innerHTML = `<div class="spin-result-box">${r.result.emoji} ${r.result.label}${extra}</div>`;
   }
   await refreshWallet();
   renderMarket();

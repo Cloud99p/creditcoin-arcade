@@ -182,20 +182,17 @@ export class NuttyRider {
     const ctx = this.ctx;
     const W = this.W, H = this.H;
     ctx.clearRect(0, 0, W, H);
-    // background
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, "#0a192f");
-    grad.addColorStop(1, "#112240");
-    ctx.fillStyle = grad;
+    // background (flat, no gradient)
+    ctx.fillStyle = "#12151c";
     ctx.fillRect(0, 0, W, H);
 
     // road
     const cx = W / 2 + this.posX * 0.35;
     const roadW = this.trackW;
-    ctx.fillStyle = "#1f2937";
+    ctx.fillStyle = "#1b202a";
     ctx.fillRect(cx - roadW / 2, 0, roadW, H);
-    ctx.strokeStyle = "#f59e0b";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#4b5563";
+    ctx.lineWidth = 2;
     ctx.setLineDash([20, 16]);
     ctx.beginPath();
     ctx.moveTo(cx, 0);
