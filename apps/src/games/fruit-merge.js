@@ -119,11 +119,10 @@ export class FruitMerge {
    *  Rebuilt each physics step from the fruit's current position/scale. */
   _polyPts(f) {
     const { w } = this.inner;
-    const s = f.r * w; // scale factor
+    const s = f.r * w; // scale factor (f.r is a NORMALIZED fraction)
     if (!f.polyPts) f.polyPts = new Array(f.poly.length);
     for (let i = 0; i < f.poly.length; i++) {
-      f.polyPts[i][0] = f.x + f.poly[i][0] * s;
-      f.polyPts[i][1] = f.y + f.poly[i][1] * s;
+      f.polyPts[i] = [f.x + f.poly[i][0] * s, f.y + f.poly[i][1] * s];
     }
     return f.polyPts;
   }
@@ -201,14 +200,16 @@ export class FruitMerge {
 
     const { w } = this.inner;
     const spec = FRUITS[this.currentTier - 1];
-    const r = spec.r * w;
+    const px = spec.r * w;       // actual pixel radius of the dropped fruit
     // furthest negative-Y vertex = top of the silhouette (for spawn height)
     let top = 0;
     for (const [, vy] of spec.poly) top = Math.min(top, vy);
-    // spawn just above the rim so it visibly drops IN, with spawn grace
+    // spawn just above the rim so it visibly drops IN, with spawn grace.
+    // r is stored NORMALIZED (fraction of inner width); geometry helpers
+    // multiply by inner.w to get pixels, so do NOT pre-multiply here.
     this.fruits.push({
       tier: this.currentTier, x: this.spawnX,
-      y: this.rimY - top * r - 4, r,
+      y: this.rimY - top * px - 4, r: spec.r,
       poly: spec.poly, vx: 0, vy: 0,
       emoji: spec.emoji, color: spec.color, pts: spec.pts,
       born: this.t, dead: false, ignore: 0,
@@ -223,7 +224,7 @@ export class FruitMerge {
     const { w } = this.inner;
     const nextTier = a.tier + 1;
     const target = FRUITS[nextTier - 1];
-    const r = target.r * w;
+    const px = target.r * w;   // actual pixel radius of the merged fruit
 
     this.fruits[aIdx].dead = true;
     this.fruits[bIdx].dead = true;
@@ -238,13 +239,13 @@ export class FruitMerge {
       this.score += 1000;
       this.onScore(this.score);
       const { x: ix, w: iw } = this.inner;
-      this.blendFx = { t: 1.2, x: ix + iw / 2, y: this.inner.y + this.inner.h * 0.4, r };
+      this.blendFx = { t: 1.2, x: ix + iw / 2, y: this.inner.y + this.inner.h * 0.4, r: px };
       this._blendClear();
       return;
     }
 
     this.fruits.push({
-      tier: nextTier, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r,
+      tier: nextTier, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r: target.r,
       poly: target.poly, vx: (a.vx + b.vx) / 2, vy: Math.min(a.vy, b.vy) * 0.5,
       emoji: target.emoji, color: target.color, pts: target.pts,
       born: this.t, dead: false, ignore: 6,
