@@ -35,6 +35,10 @@ export class NuttyRider {
     this.trackW = 0; // usable track width
     this.tilt = 0;
     this.holding = false;
+    // steer axis in [-1 (left), +1 (right)] — continuous so the biker can hold
+    // ANY lean angle, not get stuck floored at a single 90° right tilt.
+    this.steer = 0;
+    this.keys = { left: false, right: false };
     this.distance = 0;
     this.speed = BASE_SPEED;
     this.obstacles = [];
@@ -63,15 +67,39 @@ export class NuttyRider {
   }
 
   _bindEvents() {
-    const start = (e) => { this.holding = true; e.preventDefault?.(); };
-    const end = () => { this.holding = false; };
+    const recomputeAxis = () => {
+      const L = this.keys.left, R = this.keys.right;
+      // holding (pointer) doubles as "right ease" unless an arrow says otherwise
+      this.steer = R && !L ? 1 : L && !R ? -1 : 0;
+    };
+    // pointer / touch drag: tilt right by holding, left by drifting left of press
+    let anchor = null;
+    const start = (e) => {
+      const x = e.clientX ?? (e.touches?.[0]?.clientX ?? 0);
+      anchor = x; this.holding = true; recomputeAxis();
+      e.preventDefault?.();
+    };
+    const move = (e) => {
+      if (anchor == null) return;
+      const x = e.clientX ?? (e.touches?.[0]?.clientX ?? anchor);
+      this.steer = Math.max(-1, Math.min(1, (x - anchor) / 120));
+      e.preventDefault?.();
+    };
+    const end = () => { this.holding = false; anchor = null; this.keys.left = this.keys.right = false; recomputeAxis(); };
     this.canvas.addEventListener("pointerdown", start);
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", end);
+    window.addEventListener("pointermove", move);
     window.addEventListener("keydown", (e) => {
-      if (e.code === "ArrowLeft") this.holding = false;
-      if (e.code === "ArrowRight" || e.code === "Space") this.holding = true;
-      if (e.code === "Space" && this.character.id === "cricket") this._hop();
+      if (e.code === "ArrowLeft" || e.code === "KeyA") { this.keys.left = true; }
+      if (e.code === "ArrowRight" || e.code === "KeyD" || e.code === "Space") { this.keys.right = true; }
+      if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && !e.repeat) recomputeAxis();
+      if ((e.code === "Space") && this.character.id === "cricket" && !this.dead) this._hop();
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "ArrowLeft" || e.code === "KeyA") this.keys.left = false;
+      if (e.code === "ArrowRight" || e.code === "KeyD") { this.keys.right = false; }
+      recomputeAxis();
     });
   }
 
@@ -121,12 +149,14 @@ export class NuttyRider {
     this.speed = BASE_SPEED + Math.min(160, this.distance * 0.001);
     this.onScore(Math.floor(this.distance / 10), Math.floor(this.distance / 500) + 1);
 
-    // tilt control (eased)
-    const target = this.holding ? MAX_TILT : 0;
-    this.tilt += (target - this.tilt) * Math.min(1, TILT_EASE * dt * this.character.stat.tilt);
+    // tilt control (eased) toward the requested steer angle — both directions.
+    const targetTilt = this.steer * MAX_TILT;
+    this.tilt += (targetTilt - this.tilt) * Math.min(1, TILT_EASE * dt * this.character.stat.tilt);
 
-    // lateral steering from tilt + character knock resistance
-    const steer = Math.sin(this.tilt) * 120;
+    // lateral steering from lean: sine gives gentle center, strong at edges;
+    // sign matches steer so you can actively steer LEFT or RIGHT, not just
+    // floor the bike at a single hard-right angle.
+    const steer = Math.sin(this.tilt) * 120; // right tilt steers right
     this.velX = steer * this.character.stat.tilt;
 
     // spawn + scroll
