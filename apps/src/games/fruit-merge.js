@@ -44,6 +44,7 @@ const ROUNDS = 4;            // physics sub-steps per frame
 const MERGE_EPS = 0.06;      // relative radius diff allowed to merge
 const DROP_MAX_TIER = 6;     // never drop watermelons — merge two pears
 const SPAWN_GRACE = 0.7;     // seconds a fresh fruit is safe from overflow
+const OVERFLOW_HOLD = 0.55;  // seconds the pile-top must sit above the line to end (anti-spam)
 const MIN_OPEN = 40;         // min drop gap (px) before we block drops
 
 const WEIGHTS = { 1: 38, 2: 32, 3: 18, 4: 8, 5: 3, 6: 1 };
@@ -163,6 +164,7 @@ export class FruitMerge {
     this.gameOver = false;
     this.dropLocked = false;
     this.blendFx = null;
+    this._overflowHold = 0;
     this._prime();
     this.running = true;
     this._last = performance.now();
@@ -407,15 +409,28 @@ export class FruitMerge {
 
     this.fruits = this.fruits.filter((f) => !f.dead);
 
-    // overflow: a fruit that has TRULY settled is only a threat if its top
-    // crosses the kill line near the rim. Falling fruits never trigger this.
+    // overflow: the run ends when any fruit is shoved up past the kill line
+    // near the rim. We deliberately do NOT require the pile to be settled -
+    // a "must be perfectly at rest" rule let spammers dodge it by keeping a
+    // too-tall pile jiggling forever (drop-in-one-spot never dies). A short
+    // sustained-above window plus a per-fruit spawn grace stops one stray
+    // fresh drop from being an unfair instant loss, but a genuinely
+    // overflowing pile now always ends the run.
+    let overflowing = false;
     for (const f of this.fruits) {
-      const pastGrace = this.t - f.born > SPAWN_GRACE;
-      const atRest = Math.abs(f.vy) < 14 && Math.abs(f.vx) < 14;
-      if (pastGrace && atRest && this._topY(f) < this.crushY) {
+      if (this.t - f.born > SPAWN_GRACE && this._topY(f) < this.crushY) {
+        overflowing = true;
+        break;
+      }
+    }
+    if (overflowing) {
+      this._overflowHold = (this._overflowHold || 0) + dt;
+      if (this._overflowHold > OVERFLOW_HOLD) {
         this._end("OVERSIZED!");
         return;
       }
+    } else {
+      this._overflowHold = 0;
     }
   }
 
