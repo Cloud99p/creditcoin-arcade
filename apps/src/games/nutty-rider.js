@@ -1,34 +1,49 @@
 /**
- * Nutty Rider — pseudo-3D tilt-control biker (Option A).
+ * Nutty Rider — pseudo-3D desert drift racer (Option A).
  *
- * Press & hold  = lean the bike RIGHT (eased, up to 90°). The road bends
- * right to pull you into the curve; hard lean = drift with skid particles,
- * straight fast riding = speed-line motion streaks. Release eases back north.
- * Single-direction steer is an intentional difficulty spike: you chase the
- * curve and can only *lean into* right bends by pressing your own way through
- * the slaloming track.
+ * THE TRACK
+ *   A lone DIRT road runs through the desert. It is straight most of the time,
+ *   but it has BEND segments of RANDOM LENGTH. Coming out of a straight the
+ *   road bends RIGHT for a while, then bends LEFT and returns to straight.
+ *   You can only ever REDRIFT RIGHT (press & hold). So timing is everything:
+ *     - a RIGHT bend sweeping under you  -> HOLD to drift right with it
+ *     - the road turning back LEFT/straight -> RELEASE so you settle centre.
+ *   Hold too long after it straightened, or too early before the bend, and the
+ *   dirt sweeps out from under you.
  *
- * Ride through scroll obstacles: FANS (push you off the low bank toward the
- * rim), SWUNG LOGS (knock sideways), OIL (slippery — you skid wider). 4
- * characters, one special ability each. Score = distance / segments cleared.
+ * LOSE = the rider leaves the DIRT (you rode off the platform) — either by
+ * drifting too far as a bend whips past, or being KNOCKED off by a hazard.
+ * Obstacles: FANS blow you toward the rim; swinging LOGS knock you sideways.
+ * They appear anywhere, and sometimes right after a bend.
  *
- * Pure canvas: perspective road, horizon, code-drawn bike + rider sprites,
- * drift + motion particles. Emits final score to the shell for Attestcoin.
+ * Background = desert (sun, mesas, heat haze). Track = graded DIRT.
+ * Characters are code-drawn pseudo-3D "from behind" riders on a real
+ * volumetric bike. Pure canvas, no assets. Emits score via onEnd / onScore.
  */
 
 export const CHARACTERS = [
-  { id: "pig", name: "Pig", emoji: "🐷", color: "#f9a8d4", ability: "Iron Body", desc: "Resists fan knockback", stat: { tilt: 0.90, knock: 0.35, grip: 1.0 } },
-  { id: "goat", name: "Goat", emoji: "🐐", color: "#fdba74", ability: "Climber", desc: "Recovers balance faster", stat: { tilt: 1.00, knock: 0.70, grip: 1.0 } },
-  { id: "banana", name: "Banana", emoji: "🍌", color: "#fde047", ability: "Grip", desc: "Hold corners better", stat: { tilt: 1.05, knock: 0.60, grip: 1.30 } },
-  { id: "cricket", name: "Cricket", emoji: "🦗", color: "#bef264", ability: "Hop", desc: "Clears low logs", stat: { tilt: 1.00, knock: 0.80, grip: 1.05 } },
+  { id: "pig",     name: "Pig",     emoji: "🐷", color: "#f9a8d4", dark: "#be185d", ability: "Iron Body", desc: "Shrugs off fans",        stat: { turn: 1.0,  knock: 0.20, grip: 1.00 } },
+  { id: "goat",    name: "Goat",    emoji: "🐐", color: "#fdba74", dark: "#c2410c", ability: "Climber",   desc: "Recovers off the rim",   stat: { turn: 1.12, knock: 0.42, grip: 0.96 } },
+  { id: "banana",  name: "Banana",  emoji: "🍌", color: "#fde047", dark: "#a16207", ability: "Grip",      desc: "Holds the tight drift", stat: { turn: 0.92, knock: 0.38, grip: 1.52 } },
+  { id: "cricket", name: "Cricket", emoji: "🦗", color: "#bef264", dark: "#4d7c0f", ability: "Hop",       desc: "Jumps the log",         stat: { turn: 1.05, knock: 0.58, grip: 1.10 } },
 ];
 
-const MAX_LEAN = 0.92;             // max lean ~ 84°, keeps rider on screen visually
-const LEAN_EASE = 3.2;             // how fast lean responds once holding
-const LEAN_RECOVER = 4.5;          // recovery back to north (goat is fastest)
-const BASE_SPEED = 260;            // road scroll speed in "world units"
-const MAX_SPEED_UP = 220;
-const PLAYER_Y_FRAC = 0.74;        // vertical spot of the rider on screen
+const MAX_LEAN = 0.98;
+const PRESS_ACCEL = 5.6;     // lean-easing speed (feel only)
+const RECOVER = 3.2;         // lean-easing recovery (feel only)
+const BASE_SPEED = 300;
+const MAX_SPEED_UP = 300;
+const PLAYER_Y_FRAC = 0.74;
+// Rider lateral units. Bed half-width is 1.0 lane-unit wide on each side of
+// the ribbon centre. The rider moves in these SAME units across the screen.
+const LANE_W = 1.0;
+// How far a bend is allowed to sweep the dirt centre off-screen-centre, in
+// lane units. Bigger = more aggressive pushes toward the lip.
+const BEND_AMP = 0.96;
+const BEND_SLOPE = 0.00085;   // lane-units of centreline-lean per distance unit
+// Controls the rider's own lateral physics (velLane in lane-units/sec).
+const SCRUB = 0.7;           // passive scrub: slowly eases rider left on release
+const GRIP_DRAG = 2.2;       // tyre scrub multiplies velocity decay
 
 export class NuttyRider {
   constructor(canvas, { onScore, onEnd, character = CHARACTERS[0] } = {}) {
@@ -39,591 +54,511 @@ export class NuttyRider {
     this.character = character;
     this.running = false;
 
-    this.W = 0;
-    this.H = 0;
-    this.dpr = 1;
+    // screen geometry
+    this.W = 0; this.H = 0; this.dpr = 1;
+    this.horizonY = 0; this.playerY = 0;
+    this.roadHalf = 0; this.topHalf = 0; this.bermHalf = 0;
 
-    // world model
-    this.t = 0;                     // global time (drive phase for road wiggle)
-    this.distance = 0;              // units travelled
-    this.speed = 0;
-    this.lean = 0;                  // eased lean in [-1..1], 0=north, +1=right
-    this.steer = 0;                 // requested steer: press => +1 (RIGHT only)
-    this.holding = false;
-    this.laneRoad = 0;              // rider position expressed as offset from road centreline (px world)
-    this.velLane = 0;
-    this.roadBank = 0;              // how bent-right the road currently is (-1..1)
-    this.roadTarget = 0;
-    this.hop = 0;                   // cricket hop height (px)
-    this.dead = false;
+    // kinematics
+    this.t = 0; this.distance = 0; this.speed = 0;
+    this.lane = 0; this.velLane = 0; this.lean = 0;
+    this.hold = false; this.hop = 16; this.dead = false;
+    this.shiftPx = 0;
 
-    // obstacles / props are in CAR space: normalised frac of road half-width
-    // plus a "depth ahead" in world units measured from the rider.
+    // course + world
+    this.courseSegs = [];
+    this.nextSpawn = 90;
     this.obstacles = [];
-    this.propZ = [];                // world-space z-spacing of roadside speed markers
-    this.particles = [];            // drift skids + speed streaks
+    this.particles = [];
+    this.score = 0; this.level = 1;
 
     this._resize();
+    this._buildCourse();
     this._bind();
   }
 
-  // ---------------------------------------------------------------- geomet --
+  // ------------------------------------------------------------ geometry --
   _resize() {
     const dpr = window.devicePixelRatio || 1;
     this.dpr = dpr;
     const w = Math.min(window.innerWidth - 16, 460);
     const h = Math.min(window.innerHeight - 188, 700);
-    this.canvas.width = w * dpr;
-    this.canvas.height = h * dpr;
-    this.canvas.style.width = w + "px";
-    this.canvas.style.height = h + "px";
+    this.canvas.width = w * dpr; this.canvas.height = h * dpr;
+    this.canvas.style.width = w + "px"; this.canvas.style.height = h + "px";
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.W = w;
-    this.H = h;
+    this.W = w; this.H = h;
     this.horizonY = Math.round(h * 0.30);
-    // road half width just above the horizon edge and at the bottom
-    this.topHalf = Math.max(10, w * 0.10);
-    this.botHalf = w * 0.40;
-    // rider vertical (screen Y)
     this.playerY = h * PLAYER_Y_FRAC;
+    this.roadHalf = w * 0.42;      // half dirt width at the rider row (px)
+    this.topHalf = Math.max(8, w * 0.06);
+    this.bermHalf = w * 0.10;      // shoulder/berm width (px)
   }
-
-  // world param "k": k=1 at the rider row, k=0 far at the horizon. Map to screen.
   kToY(k) { return this.horizonY + (this.playerY - this.horizonY) * k; }
-  halfAt(k) { return this.topHalf + (this.botHalf - this.topHalf) * k; }
+  bedHalfAt(k) { return this.topHalf + (this.roadHalf - this.topHalf) * k; }
+  // lane-unit -> px from the playable centre anchor:
+  laneToPx(l) { return l * (this.roadHalf - 6); }
 
-  // ------------------------------------------------------------ input ------
+  // ------------------------------------------------------------- input --
   _bind() {
-    const press = (e) => {
-      this.holding = true;
-      // press = lean right => steer +1 (single-direction dynamic). The rider
-      // counter-drifts by releasing to let the speed + curve carry it back.
-      this.steer = 1;
-      e.preventDefault && e.preventDefault();
-    };
-    const release = () => {
-      this.holding = false;
-      this.steer = 0;
-    };
-    this.canvas.addEventListener("pointerdown", press);
-    window.addEventListener("pointerup", release);
-    window.addEventListener("pointercancel", release);
-    window.addEventListener("pointerleave", release);
+    const down = (e) => { if (this.running && !this.dead) { this.hold = true; if (e && e.cancelable) e.preventDefault(); } };
+    const up = () => { this.hold = false; };
+    this.canvas.addEventListener("pointerdown", down);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("pointerleave", up);
     window.addEventListener("keydown", (e) => {
       const c = e.code;
-      if (c === "ArrowRight" || c === "KeyD" || c === "Space") { if (!this._keyRt) { this._keyRt = true; this.holding = true; this.steer = 1; } e.preventDefault && e.preventDefault(); }
-      if (c === "Space" && this.character.id === "cricket" && this.running && !this.dead) this.hop = Math.max(this.hop, 54);
+      if ((c === "ArrowRight" || c === "KeyD" || c === "Space") && this.running && !this.dead) { this.hold = true; if (e.cancelable) e.preventDefault(); }
+      if ((c === "ArrowUp" || c === "KeyW" || c === "Space") && this.character.id === "cricket" && this.running && !this.dead) this._hop();
     });
     window.addEventListener("keyup", (e) => {
-      if (e.code === "ArrowRight" || e.code === "KeyD" || e.code === "Space") { this._keyRt = false; release(); }
+      const c = e.code;
+      if (c === "ArrowRight" || c === "KeyD" || c === "Space") this.hold = false;
     });
   }
 
-  // ------------------------------------------------------------ run --------
+  // ------------------------------------------------------------- course --
+  // Alternating segments: straight / RIGHT-bend / LEFT (return) / straight ...
+  // Lengths vary so a drift can be a short flick or a long sustained lean.
+  _buildCourse() {
+    const segs = [];
+    let sign = Math.random() < 0.5 ? 1 : -1;   // which way the NEXT real bend leans
+    let total = 0;
+    while (total < 26000) {
+      // lead straight
+      const a = 140 + Math.random() * 220; segs.push({ d: 0, len: a }); total += a;
+      // a real bend, random length, leaning `sign` (mostly right=+1 by design?)
+      // we make right bends (+1) common so HOLD is the frequent ask
+      const bl = 520 + Math.random() * (sign > 0 ? 900 : 640);
+      segs.push({ d: sign, len: bl }); total += bl;
+      // the return leg that brings the road back to straight-ish
+      const rl = 520 + Math.random() * 640;
+      segs.push({ d: -sign, len: rl }); total += rl;
+      if (Math.random() < 0.6) sign = -sign;
+    }
+    // bias every segment toward +1 somewhat more often => HOLD is the common
+    // sustained tool (fits "you drift right") without making left-only tracks.
+    this.courseSegs = segs;
+  }
+
+  // Where the dirt CENTRE has been pushed (lane units) at distance d, clamped
+  // to BEND_AMP so the road stays drawable/lovable, plus a little s-curve.
+  _centerBias(d) {
+    const s = this.courseSegs;
+    let acc = 0, lat = 0, i = 0;
+    // accumulate full segments before d
+    for (i = 0; i < s.length && acc + s[i].len <= d; i++) { lat += s[i].d * BEND_SLOPE * s[i].len; acc += s[i].len; }
+    const seg = s[Math.min(i, s.length - 1)];
+    const part = seg.len ? Math.max(0, Math.min(1, (d - acc) / seg.len)) : 0;
+    lat += seg.d * BEND_SLOPE * seg.len * part;
+    // clamp
+    return Math.max(-BEND_AMP, Math.min(BEND_AMP, lat));
+  }
+
+  _hop() { if (this.character.id === "cricket") this.hop = Math.max(this.hop, 60); }
+
+  start() { this._resize(); this._restart(); this.running = true; this._last = performance.now(); this._loop(this._last); }
+
   _restart() {
-    this.t = 0;
-    this.distance = 0;
-    this.speed = 0;
-    this.lean = 0;
-    this.steer = 0;
-    this.holding = false;
-    this.laneRoad = 0;
-    this.velLane = 0;
-    this.roadBank = 0;
-    this.roadTarget = 0;
-    this.hop = 0;
-    this.dead = false;
-    this.obstacles = [];
-    this.particles = [];
-    this._spawnNext = 20; // first obstacle appears after a beat
-    this._marker = 0;
+    this.t = 0; this.distance = 0; this.speed = 0;
+    this.lane = 0; this.velLane = 0; this.lean = 0;
+    this.hold = false; this.hop = 16; this.dead = false;
+    this.obstacles = []; this.particles = []; this.nextSpawn = 90;
+    this.score = 0; this.level = 1;
   }
 
-  start() {
-    this._resize();
-    this._restart();
-    this.running = true;
-    this._last = performance.now();
-    this._loop(this._last);
-  }
-
-  _hop() { if (this.character.id === "cricket") this.hop = Math.max(this.hop, 54); }
-
-  _addObstacle(type, aheadZ, frac, extra = {}) {
-    this.obstacles.push(Object.assign({
-      type, aheadZ, frac, hit: false, yaw: 0,
-    }, extra));
-  }
-
-  _spawnAgent() {
-    const type = ["fan", "log", "oil"][Math.floor(Math.random() * 3)];
-    // bias spawns slightly toward the central riding lane (+/-0.5) so a pure
-    // lean never feels like a wall; hazards earn their kills.
-    const frac = (Math.random() * 2 - 1) * 0.5;
-    const aheadZ = 210 + Math.random() * 90;
-    const extra = {};
-    if (type === "fan") extra.yDir = Math.random() < 0.5 ? -1 : 1;
-    else if (type === "log") extra.angle = Math.random() * 2 - 1;
-    this._addObstacle(type, aheadZ, frac, extra);
-  }
-
-  // ------------------------------------------------------------ step -------
+  // -------------------------------------------------------------- step --
   _step(dt) {
+    if (this.dead) return;
     this.t += dt;
-
-    // speed ramps up with distance (a "pace" difficulty curve)
-    this.speed += (BASE_SPEED + Math.min(MAX_SPEED_UP, this.distance * 0.0012) - this.speed) * Math.min(1, dt * 1.5);
+    this.speed += (BASE_SPEED + Math.min(MAX_SPEED_UP, this.distance * 0.5) - this.speed) * Math.min(1, dt * 1.4);
     this.distance += this.speed * dt;
 
-    // --- LEAN (the core dynamic). Press => lean right, eased by char. ---
-    const targetLean = this.steer * MAX_LEAN;
-    if (this.steer > 0) {
-      this.lean += (targetLean - this.lean) * Math.min(1, LEAN_EASE * this.character.stat.tilt * dt);
-      this.roadTarget = 1;                       // press pulls the road right
+    const grip = this.character.stat.grip;
+    const bias = this._centerBias(this.distance);   // road centre lateral (units)
+    // ribbon fade for render: the drawn dirt centre follows the bend smoothly
+    this.shiftPx += (this.laneToPx(bias) - this.shiftPx) * Math.min(1, dt * 5);
+
+    // --- RIDER LATERAL ------------------------------------------------
+    // The rider's absolute screen-lane is driven by steering. ONLY a HOLD
+    // pushes right (HARD lean = right). Released, the bike scrubs back LEFT a
+    // little on its own. Falls occur RELATIVE to the dirt centre (`bias`),
+    // which a bend sweeps sideways underneath you — so you must HOLD to ride a
+    // right sweep right, and RELEASE so the return lets you settle centre.
+    const turn = this.character.stat.turn;
+    const leanLim = 1 - Math.min(0.9, this.lean);  // deeper lean = less room to keep steering
+    if (this.hold) {
+      this.lean += (MAX_LEAN - this.lean) * Math.min(1, PRESS_ACCEL * turn * dt);
+      this.velLane += 1.15 * turn * 46 * dt;              // push RIGHT (units/s)
     } else {
-      // recover to north (goat climbs back fastest via stat.tilt)
-      const recv = LEAN_RECOVER * (0.7 + 0.5 * this.character.stat.tilt);
-      this.lean += (0 - this.lean) * Math.min(1, recv * dt);
-      this.roadTarget = 0;
+      this.lean += (0 - this.lean) * Math.min(1, RECOVER * turn * dt);
+      this.velLane -= SCRUB * 30 * dt;                    // gentle leftward scrub
     }
+    // grip = how well the slide is collected;
+    this.velLane *= Math.max(0, 1 - GRIP_DRAG * graspOf(grip) * dt);
+    this.lane += this.velLane * dt;
+    // screen-coherent reach: never drawn past a modest half-screen envelope
+    this.lane = Math.max(-0.96, Math.min(0.96, this.lane));
+    void leanLim;
 
-    // --- steering: lean shoves the rider across the road to the right. ---
-    const grip = this.character.stat.grip * (this._onOil() ? 0.45 : 1.0);
-    this.velLane += this.lean * 900 * dt;          // lean pushes right
-    this.velLane *= Math.max(0, 1 - 2.6 * grip * dt); // friction
-    // released: let the tire find its line back toward the middle of the road
-    // (single-direction control, so the "release" is the only way to unwind).
-    if (this.steer <= 0 && Math.abs(this.laneRoad) > 4) {
-      this.velLane -= Math.sign(this.laneRoad) * 240 * dt * (0.6 + 0.5 * grip);
-    }
-
-    // rider is free to move a good chunk of the road (dodge corridor)
-    const maxOff = this.botHalf * 0.62;
-    this.laneRoad += this.velLane * dt;
-    this.laneRoad = Math.max(-maxOff, Math.min(maxOff, this.laneRoad));
-
-    // --- road banking itself follows the lean (eases to target). ---
-    this.roadBank += (this.roadTarget - this.roadBank) * Math.min(1, 2.4 * dt);
-    this.roadBank += (0 - this.roadBank) * Math.min(1, 1.6 * dt); // slight ease back drift
-
-    // a slow autonomous wiggle so the track slaloms even when you stop steering,
-    // giving the single-direction hold real job: briefly release to carve left.
-    this.roadTargetMath = Math.sin(this.t * 0.6) * 0.6 + Math.sin(this.t * 0.23 + 1.7) * 0.4;
-    // blend: pressed attempts to *override* toward the right; released drifts
-    // back toward the gentle sinusoidal left (the "return" difficulty).
-    this.roadCurve = this.roadBank * 1.0 + (1 - Math.abs(this.roadBank)) * this.roadTargetMath * 0.9;
-
-    // --- hop decay ---
-    if (this.hop > 0) this.hop = Math.max(0, this.hop - 150 * dt);
-
-    // --- spawn obstacles & scroll them toward the rider ---
-    this._spawnNext -= this.speed * dt;
-    if (this._spawnNext <= 0) {
-      this._spawnAgent();
-      this._spawnNext = 240 + Math.random() * 260;
-    }
-    for (const o of this.obstacles) {
-      o.aheadZ -= this.speed * dt;
-      // fans drift / oscillate laterally while in view
-      if (o.type === "fan") o.frac += Math.sin(this.t * 3 + o.aheadZ) * 0.002;
-      if (o.type === "log") o.yaw = Math.sin(this.t * 2 + o.aheadZ) * 0.4;
-    }
-    this.obstacles = this.obstacles.filter((o) => o.aheadZ > -30 && !o.hit);
-
-    // --- particle emission (drift + motion) tied to lean & speed. ---
-    const riderX = this.W / 2 + Math.max(-this.botHalf * 0.6, Math.min(this.botHalf * 0.6, this.laneRoad));
-    const speedK = this.speed / (BASE_SPEED + MAX_SPEED_UP);
-    const leanMag = Math.abs(this.lean);
-    // DRIFT: rear tyre skids while pressing hard (lean high) — throw dust out
-    // to the outside of the rear wheel, which way depends on which way you're
-    // being swung; we simplest spray opposite the lean direction + slight rear.
-    if (this.lean > 0.35 && Math.random() < (0.5 + leanMag * 1.4) * dt * 60) {
-      // after the bike banks right, the rear wheel sits at rider x - offset
-      this._emit("skid", riderX - 18 * Math.cos(this.lean * 0.42) - 6, this.playerY - this.hop + 14,
-        (Math.random() - 0.6) * 40, (10 + Math.random() * 40), 0.5 + Math.random() * 0.35, 2.5 + Math.random() * 2.5, 0.75);
-    }
-    // STRAIGHT-LINE: faint speed streaks racing along the road when going fast.
-    if (speedK > 0.6 && Math.random() < (30 + speedK * 120) * dt) {
-      this._emit("streak", (Math.random() - 0.5) * this.W * 0.5, this.horizonY + Math.random() * (this.H - this.horizonY),
-        0, 120 + Math.random() * 160, 0.35 + Math.random() * 0.3, 1 + Math.random(), 0.35);
-    }
-    // CORNERING dust kicked off the banked verge
-    if (leanMag > 0.2 && Math.random() < 40 * dt) {
-      this._emit("dust", riderX - Math.sign(this.lean) * this.botHalf * 0.5 + (Math.random() - 0.5) * 18, this.playerY + (Math.random() - 0.5) * 24,
-        Math.sign(this.lean) * (40 + Math.random() * 60), -20 - Math.random() * 40, 0.55 + Math.random() * 0.3, 4 + Math.random() * 4, 0.8);
-    }
-
-    // particles lifecycle
-    for (const p of this.particles) p.life -= dt;
-    this.particles = this.particles.filter((p) => p.life > 0);
-
-    // --- collision: only when obstacle passes the rider row ---
-    const crossed = this.obstacles.filter((o) => o.aheadZ <= 0 && o.aheadZ > -40 && !o.hit);
-    for (const o of crossed) {
-      if (o.hit) continue;
-      // measure horizontal gap in the same units as the rider's lane offset.
-      const halfRoad = this.botHalf;
-      const obx = o.frac * halfRoad;
-      const gap = Math.abs(obx - this.laneRoad);
-      const riderHalf = this._riderHalfW();
-      const obHalf = (o.type === "oil" ? halfRoad * 0.30 : halfRoad * 0.16);
-      if (gap < riderHalf + obHalf) {
-        // cricket hops over logs
-        if (o.type === "log" && o.hopClearable !== false && this.hop > 0) { o.hit = true; continue; }
-        o.hit = true;
-        this._resolveHit(o);
-        if (this.dead) break;
+    // --- hop ------------------------------------------------
+    if (this.character.id === "cricket") {
+      if (this.hold && this.lane > bias + 0.55 && this.hop <= 16) {
+        // (cricket hop is input-triggered only; nothing forced here)
       }
     }
-    this.score = Math.floor(this.distance / 10);
-    this.level = Math.floor(this.distance / 500) + 1;
+    if (this.hop > 16) this.hop = Math.max(16, this.hop - 260 * dt);
+    else this.hop = 16;
+
+    // --- FALL: left the dirt -------------------------------------------
+    const riderToRoad = Math.abs(bias - this.lane);   // abs lane-units from bed centre
+    if (this.character.id === "goat") {
+      // Climber claws back from the outer couple of % (tiny grace only)
+      if (riderToRoad > LANE_W + 0.030) this._fall();
+    } else if (riderToRoad >= LANE_W - 0.012) {
+      this._fall();
+    }
+
+    // --- obstacles --------------------------------------------
+    this.nextSpawn -= this.speed * dt;
+    if (this.nextSpawn <= 0) { this._spawnOb(); this.nextSpawn = 240 + Math.random() * 220 + (this.speed > BASE_SPEED ? 40 : 0); }
+    for (const o of this.obstacles) { o.ahead -= this.speed * dt; o.t += dt; if (o.type === "log") o.swing = Math.sin(o.t * 1.4 + o.phase) * 0.55; }
+    this.obstacles = this.obstacles.filter((o) => o.ahead > -60 && !o.hit);
+
+    this._emitAmbient(dt);
+
+    // collisions at the rider's current band
+    for (const o of this.obstacles) {
+      if (o.hit || o.ahead > 60 || o.ahead < -60) continue;
+      // near contact if within ~ a band around the rider on screen distance
+      const oBand = o.band !== undefined ? o.band : 0; // obstacle's own lateral band offset from road centre
+      const obxRel = o.type === "log" ? o.swing : o.frac;
+      const obxC = bias + obxRel;                       // absolute lane of hazard
+      const gap = Math.abs(obxC - this.lane);
+      const half = o.type === "log" ? 0.16 : 0.12;
+      if (gap < 0.12 + half) {
+        // only when the obstacle is actually AT the rider's depth
+        const krel = 1 + o.ahead / 40;
+        if (o.ahead > -40 && o.ahead < 2) this._resolveHit(o);
+      }
+    }
+
+    this.score = Math.max(this.score || 0, Math.floor(this.distance / 12));
+    this.level = Math.floor(this.distance / 600) + 1;
     this.onScore(this.score, this.level);
   }
 
-  _riderHalfW() { return this.botHalf * 0.14; }
-
-  _onOil() {
-    // checks if an oil patch is currently under the rider band
-    return this.obstacles.some((o) => o.type === "oil" && Math.abs(o.aheadZ) < 20 && !o.hit);
+  _spawnOb() {
+    // pick a lateral band offset from the current road CENTRE; a fan may sit
+    // on the shoulder pressing you off, a log swings across a wider arc
+    const type = Math.random() < 0.5 ? "fan" : "log";
+    if (type === "log") {
+      this._addOb(type, 0, 300 + Math.random() * 160, Math.random() * 6.28);
+    } else {
+      // fans: some sit near your line; the hardest sit just off the shoulder
+      const edge = Math.random() < 0.45;
+      const frac = edge ? (Math.random() < 0.5 ? -0.78 : 0.78) : (Math.random() * 2 - 1) * 0.5;
+      this._addOb(type, frac, 300 + Math.random() * 160, 0);
+    }
+  }
+  _addOb(type, frac, ahead, phase) {
+    this.obstacles.push({ type, frac, ahead, phase, hit: false, t: 0, swing: 0 });
   }
 
   _resolveHit(o) {
-    if (o.type === "oil") return; // slipping handled implicitly (grip reduced); no death
-    if (o.hit === true && o.type !== "fan" && o.type !== "log") return;
-    // FAN: iron-body pig resists its shove; otherwise a knock sideways.
-    if (o.type === "fan") {
-      const edge = o.frac > (0) ? 1 : -1;
-      const knock = this.character.stat.knock; // pig low => shrugs off
-      this.velLane += edge * (1.6 - knock * 0.9) * 2600 * 0.5;
-      if (Math.abs(this.laneRoad) > this.botHalf * 0.5) { this._die(); }
-      return;
-    }
-    if (o.type === "log") {
-      // pushed off toward the outside of the curve. cricket hops over them.
-      const dir = this.roadCurve >= 0 ? 1 : -1;
-      this.velLane += dir * (2.2) * 1200;
-      if (Math.abs(this.laneRoad) >= this.botHalf * 0.5) { this._die(); }
-      return;
+    if (this.dead) return;
+    if (o.type === "log" && this.character.id === "cricket" && this.hop > 16) { o.hit = true; this.hop = 16; return; }
+    o.hit = true;
+    // a hazard shoves the rider toward an edge, and takes a bite of lean
+    const pushDir = Math.abs(this.lane) < 0.05 ? (Math.random() < 0.5 ? 1 : -1)
+      : (this.lane >= 0 ? 1 : -1);
+    const useKnock = this.character.stat.knock * (o.type === "fan" ? 1.0 : 0.85);
+    const resist = 1 - useKnock;
+    const mag = (o.type === "fan" ? 0.30 : 0.30) * (1.25 - this.character.stat.grip * 0.15);
+    this.velLane += pushDir * resist * mag * 3.0;
+    this.lean = Math.min(MAX_LEAN, this.lean + 0.25);
+    // knock may put you over the edge at once — check now (goat can still claw)
+    const bias = this._centerBias(this.distance);
+    if (Math.abs(bias - this.lane) > (this.character.id === "goat" ? LANE_W + 0.02 : LANE_W - 0.012)) {
+      if (this.character.id === "goat") { this.velLane *= -0.5; /* bounced back in */ }
+      else this._fall();
     }
   }
 
-  _die() {
+  _fall() {
     if (this.dead) return;
     this.dead = true;
     this.running = false;
-    this.onEnd(this.score);
+    const s = Math.max(this.score || 0, Math.floor(this.distance / 12));
+    this.score = s;
+    this.onEnd(s);
   }
 
-  // ------------------------------------------------------------ draw -------
-  _drawSceneBack() {
+  // =============================================================== render ==
+  _roadCX(k) { return this.W / 2 + this.shiftPx * k; }
+  _riderX() { return this.W / 2 + this.laneToPx(this.lane); }
+
+  _drawDesert() {
     const ctx = this.ctx, W = this.W, H = this.H;
-    // sky
-    const sky = ctx.createLinearGradient(0, 0, 0, this.horizonY + 4);
-    sky.addColorStop(0, "#0e1626");
-    sky.addColorStop(1, "#1b2437");
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, W, this.horizonY + 4);
-    // stars
-    ctx.fillStyle = "rgba(226,232,240,0.4)";
-    let seed = 12345;
-    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    for (let i = 0; i < 40; i++) {
-      const x = rnd() * W, y = rnd() * this.horizonY;
-      const tw = 0.3 + 0.7 * Math.abs(Math.sin(this.t * 2 + i * 3));
-      ctx.globalAlpha = tw * 0.8;
-      ctx.fillRect(x, y, 2, 2);
+    const g = ctx.createLinearGradient(0, 0, 0, this.horizonY + 2);
+    g.addColorStop(0, "#37146a"); g.addColorStop(0.45, "#c64a1e"); g.addColorStop(1, "#ffcf6e");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, this.horizonY + 2);
+    // sun + halo
+    ctx.fillStyle = "rgba(255,206,120,0.25)";
+    ctx.beginPath(); ctx.arc(W * 0.78, this.horizonY - 2, Math.max(30, H * 0.05), 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffd27d";
+    ctx.beginPath(); ctx.arc(W * 0.78, this.horizonY - 2, Math.max(18, H * 0.03), 0, Math.PI * 2); ctx.fill();
+    // far mesas
+    ctx.fillStyle = "#a0391d";
+    ctx.fillRect(0, this.horizonY - 24, W * 0.20, 32); ctx.fillRect(W * 0.40, this.horizonY - 40, W * 0.12, 48);
+    ctx.fillRect(W * 0.92, this.horizonY - 14, W * 0.09, 22);
+    ctx.fillStyle = "#6f2712";
+    ctx.beginPath(); ctx.moveTo(0, this.horizonY);
+    ctx.lineTo(W * 0.16, this.horizonY - 18); ctx.lineTo(W * 0.32, this.horizonY - 4);
+    ctx.lineTo(W * 0.5, this.horizonY - 28); ctx.lineTo(W * 0.68, this.horizonY - 6);
+    ctx.lineTo(W * 0.85, this.horizonY - 18); ctx.lineTo(W, this.horizonY - 2);
+    ctx.closePath(); ctx.fill();
+    // desert floor you fall INTO past the dirt
+    const d = ctx.createLinearGradient(0, this.horizonY, 0, H);
+    d.addColorStop(0, "#d99545"); d.addColorStop(1, "#7c431c");
+    ctx.fillStyle = d; ctx.fillRect(0, this.horizonY, W, H - this.horizonY);
+    ctx.strokeStyle = "rgba(120,60,20,0.22)"; ctx.lineWidth = 1;
+    for (let i = 0; i < 24; i++) {
+      const x0 = (i * 149) % W, y0 = this.horizonY + 8 + ((i * 61) % (H - this.horizonY - 12));
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + 11, y0 + 3); ctx.stroke();
     }
-    ctx.globalAlpha = 1;
-    // horizon band: distant neon city silhouette
-    ctx.fillStyle = "#0a1020";
-    ctx.fillRect(0, this.horizonY - 6, W, 8);
+    if (this.lean > 0.5) ctx.fillStyle = "rgba(255,240,210,0.10)"; // heat haze
   }
 
-  // Draws the road using the "roadway strips to the horizon" technique.
   _drawRoad() {
     const ctx = this.ctx, W = this.W, H = this.H;
-    const skew = this.roadCurve;              // -1..1 lateral curve intensity
-
-    // ground fill under the road so there is always pavement below the bike
-    const ground = ctx.createLinearGradient(0, this.horizonY, 0, H);
-    ground.addColorStop(0, "#111a27");
-    ground.addColorStop(1, "#090d16");
-    ctx.fillStyle = ground;
-    ctx.fillRect(0, this.horizonY, W, H - this.horizonY);
-
-    // build road rows from the horizon (k=0) down PAST the player row so the
-    // road runs to the bottom edge of the screen.
-    const SEG = 40;
-    const kBottom = (H - this.horizonY) / (this.playerY - this.horizonY); // ~1.4
-    const N = Math.ceil(SEG * kBottom);
-    const rows = [];
+    const bottomK = (H - this.horizonY) / (this.playerY - this.horizonY);
+    const N = 30, Kmax = bottomK;
+    let prev = null;
     for (let i = 0; i <= N; i++) {
-      const kRaw = (i / N) * kBottom;          // 0..kBottom
-      const k = Math.min(1, kRaw);             // perspective clamped at player
-      const yRow = this.kToY(k);
-      const y = kRaw > 1 ? this.playerY + (kRaw - 1) * (H - this.playerY) : yRow;
-      const half = k < 1 ? this.halfAt(k) : this.botHalf * (1 + (kRaw - 1) * 0.0);
-      const ease = 1 - Math.pow(1 - k, 1.7);
-      // the ROAD is fixed around screen-center; only the perspective sway of a
-      // nominal curve helps it feel alive — the RIDER crosses it, not the other
-      // way round.
-      const cx = (W / 2) + skew * Math.pow(k, 1.55) * W * 0.16;
-      rows.push({ y, cx, half });
-    }
-
-    // contiguous pavement quads
-    ctx.fillStyle = "#151b28";
-    for (let i = 0; i < rows.length - 1; i++) {
-      const a = rows[i], b = rows[i + 1];
-      ctx.beginPath();
-      ctx.moveTo(a.cx - a.half, a.y);
-      ctx.lineTo(b.cx - b.half, b.y);
-      ctx.lineTo(b.cx + b.half, b.y);
-      ctx.lineTo(a.cx + a.half, a.y);
-      ctx.closePath();
-      ctx.fill();
-    }
-    // lane divider dashes racing toward the player = straight-line speed motion
-    ctx.strokeStyle = "#3d4b63";
-    ctx.lineWidth = 2;
-    for (let i = 0; i < rows.length - 1; i++) {
-      const a = rows[i], b = rows[i + 1];
-      if (((i % 2) + Math.floor(this.distance / 14)) % 2 === 0) {
-        ctx.globalAlpha = 0.45 + 0.4 * (a.y - this.horizonY) / (H - this.horizonY);
-        ctx.beginPath(); ctx.moveTo(a.cx, a.y); ctx.lineTo(b.cx, b.y); ctx.stroke();
+      const kRaw = Kmax * i / N;
+      const far = kRaw <= 1;
+      const k = Math.min(1, kRaw);
+      const y = far ? this.kToY(k) : this.playerY + (kRaw - 1) * (H - this.playerY);
+      const half = far ? this.bedHalfAt(k) : this.roadHalf + (kRaw - 1) * this.roadHalf * 0.3;
+      const cx = this._roadCX(k);
+      const left = cx - half, right = cx + half;
+      if (prev) {
+        const g = ctx.createLinearGradient(0, prev.y, 0, y);
+        g.addColorStop(0, "#c98a3f"); g.addColorStop(1, "#ae6d2c");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.moveTo(prev.l, prev.y); ctx.lineTo(prev.r, prev.y);
+        ctx.lineTo(right, y); ctx.lineTo(left, y); ctx.closePath(); ctx.fill();
+        // side berms (shoulder drop)
+        ctx.fillStyle = "#8a5a26";
+        ctx.beginPath(); ctx.moveTo(prev.l - this.bermHalf, prev.y); ctx.lineTo(prev.l, prev.y);
+        ctx.lineTo(left, y); ctx.lineTo(left - this.bermHalf, y); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(prev.r, prev.y); ctx.lineTo(prev.r + this.bermHalf, prev.y);
+        ctx.lineTo(right + this.bermHalf, y); ctx.lineTo(right, y); ctx.closePath(); ctx.fill();
       }
+      prev = { l: left, r: right, y };
     }
-    ctx.globalAlpha = 1;
-    // bright left edge + green right verge so left/right reads instantly
-    const edges = [
-      { s: "#e8eefb", side: -1 },
-      { s: "#34d399", side: 1 },
-    ];
-    for (const e of edges) {
-      ctx.strokeStyle = e.s;
-      ctx.lineWidth = 4;
+    // pale worn edge lines on the dirt lips
+    ctx.strokeStyle = "rgba(255,236,200,0.8)"; ctx.lineWidth = 2.4;
+    const trace = (side) => {
       ctx.beginPath();
-      rows.forEach((r, i) => { const x = r.cx + e.side * r.half; if (i === 0) ctx.moveTo(x, r.y); else ctx.lineTo(x, r.y); });
+      let started = false;
+      for (let i = 0; i <= N; i++) {
+        const kRaw = Kmax * i / N; const sp = kRaw > 1; const k = Math.min(1, kRaw);
+        const y = sp ? this.playerY + (kRaw - 1) * (H - this.playerY) : this.kToY(k);
+        const half = sp ? this.roadHalf + (kRaw - 1) * this.roadHalf * 0.3 : this.bedHalfAt(k);
+        const x = side(this._roadCX(k), half);
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
       ctx.stroke();
-    }
-  }
-
-
-  _emit(kind, x, y, vx, vy, life, size, baseA) {
-    if (this.particles.length > 220) this.particles.shift();
-    this.particles.push({ kind, x, y, vx, vy, life, maxLife: life, size, baseA });
-  }
-
-  _drawObstacles() {
-    const ctx = this.ctx;
-    // draw from far (high k) to near.
-    const sorted = this.obstacles.slice().sort((p, q) => p.aheadZ - q.aheadZ);
-    for (const o of sorted) {
-      const depth = Math.max(0, o.aheadZ);
-      const k = Math.max(0.01, Math.min(1, 1 - depth / 280));
-      const y = this.kToY(Math.min(1, k));
-      const half = this.halfAt(k);
-      const cx = (this.W / 2) + this.roadCurve * Math.pow(k, 1.55) * this.W * 0.16 + o.frac * half;
-      this._drawObstacleShape(o, cx, y, k);
+    };
+    trace((cx, h) => cx - h);
+    trace((cx, h) => cx + h);
+    // centre dashed line
+    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
+    for (let i = 0; i < N - 1; i += 2) {
+      const kA = Kmax * i / N, kB = Kmax * (i + 1) / N;
+      ctx.beginPath();
+      ctx.moveTo(this._roadCX(Math.min(1, kA)), this.kToY(Math.min(1, kA)));
+      ctx.lineTo(this._roadCX(Math.min(1, kB)), this.kToY(Math.min(1, kB))); ctx.stroke();
     }
   }
 
   _drawObstacleShape(o, cx, y, k) {
     const ctx = this.ctx;
-    const scale = Math.max(0.2, 0.35 + k * 0.85);
+    const s = Math.max(0.16, 0.3 + k * 1.1);
+    ctx.save();
+    ctx.translate(cx, y);
     if (o.type === "fan") {
+      ctx.scale(s, s);
+      ctx.fillStyle = "#7f6a2f";
+      ctx.beginPath(); ctx.ellipse(0, 9, 34, 11, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#474747"; ctx.strokeStyle = "#2c2c2c"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(-20, -13, 40, 32, 6); ctx.fill(); ctx.stroke();
       ctx.save();
-      ctx.translate(cx, y);
-      ctx.scale(scale, scale * 0.9);
-      // pedestal
-      ctx.fillStyle = "#243041";
-      ctx.fillRect(-16, -2, 32, 20);
-      // fan housing + spinning blades
-      const spin = this.t * 20;
-      ctx.translate(0, -18);
-      ctx.fillStyle = "#0f1520";
-      ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = o.yDir > 0 ? "#67e8f9" : "#f0abfc"; ctx.lineWidth = 3;
+      ctx.translate(0, -20);
+      ctx.fillStyle = "#161616"; ctx.strokeStyle = "#8a8a8a"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, 28, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // rotating danger blades
+      const a = this.t * 20;
       for (let b = 0; b < 3; b++) {
-        const a0 = spin + b * Math.PI * 2 / 3;
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a0) * 13, Math.sin(a0) * 13); ctx.stroke();
+        const an = a + b * 2.094;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(an) * 26, Math.sin(an) * 26);
+        ctx.strokeStyle = "rgba(255,120,120,0.8)"; ctx.lineWidth = 6; ctx.stroke();
       }
-      // gust direction arrows
-      ctx.fillStyle = o.yDir > 0 ? "#22d3ee" : "#e879f9";
-      const ar = o.yDir > 0 ? 0 : Math.PI;
-      ctx.fillRect(-1, 3, 2, 12);
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(ar - 2.4) * 3, o.yDir > 0 ? 14 : -14); ctx.lineTo(Math.cos(ar) * 3, o.yDir > 0 ? 20 : -20); ctx.lineTo(Math.cos(ar + 2.4) * 3, o.yDir > 0 ? 14 : -14);
+      ctx.fillStyle = "rgba(255,190,90,0.95)"; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-    } else if (o.type === "log") {
+      // gust toward the play lane (drawn pointing whichever the hazard blows)
+      ctx.fillStyle = "rgba(255,255,240,0.3)";
+      for (let gIdx = 0; gIdx < 3; gIdx++) { const yy = -14 - gIdx * 9; ctx.fillRect(-58, yy - 1, 16 + gIdx * 6, 2); }
+      ctx.restore();
+    } else {
+      // LOG pendulum: a timber beam hinged on one side swinging across
+      ctx.scale(s, s);
+      const L = 30;
+      // pivot post
+      ctx.fillStyle = "#5d4118"; ctx.fillRect(6, 0, 7, 20);
+      ctx.fillStyle = "#6e501f"; ctx.fillRect(0, 20, 20, 6);
       ctx.save();
-      ctx.translate(cx, y - 4 * scale);
-      ctx.scale(scale, scale);
-      ctx.rotate(o.yaw || 0);
-      const grad = ctx.createLinearGradient(-22, 0, 22, 0);
-      grad.addColorStop(0, "#7c4a12"); grad.addColorStop(0.5, "#a16207"); grad.addColorStop(1, "#713f12");
+      ctx.translate(0, 0);
+      // beam angled by the swing when NOT centred on the hinge is complex;
+      // draw the log as a horizontal swinging board at this position
+      const grad = ctx.createLinearGradient(-L, 0, L, 0);
+      grad.addColorStop(0, "#8a4a12"); grad.addColorStop(0.5, "#c9842a"); grad.addColorStop(1, "#6b3a10");
       ctx.fillStyle = grad;
-      ctx.beginPath(); ctx.roundRect(-24, -5, 48, 11, 5); ctx.fill();
-      ctx.strokeStyle = "#fcd34d"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(-L, -5, L * 2, 10, 5); ctx.fill();
+      ctx.strokeStyle = "#f0b54a"; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.fillStyle = "rgba(70,35,6,0.6)";
+      for (let gIdx = 0; gIdx < 3; gIdx++) ctx.fillRect(-L + 5 + gIdx * 18, -3, 2, 6);
       ctx.restore();
-    } else { // oil
-      ctx.save();
-      ctx.translate(cx, y + 2 * scale);
-      ctx.scale(scale, scale * 0.8);
-      const g = ctx.createRadialGradient(0, 0, 2, 0, 0, 22);
-      g.addColorStop(0, "rgba(30,41,59,0.85)"); g.addColorStop(0.7, "rgba(56,65,85,0.7)"); g.addColorStop(1, "rgba(56,65,85,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
-      // rainbow glint
-      ctx.strokeStyle = "rgba(94,234,212,0.5)"; ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.stroke();
       ctx.restore();
     }
   }
 
-  // ----------------------------------------------------------------------- rider
-  _drawRider() {
+  _drawObstacles() {
     const ctx = this.ctx;
-    const baseY = this.playerY - this.hop;
-    const halfRoad = this.botHalf;
-    const x = this.W / 2 + Math.max(-halfRoad * 0.6, Math.min(halfRoad * 0.6, this.laneRoad));
-
-    ctx.save();
-    ctx.translate(x, baseY);
-
-    // shadow under the bike that widens as we hop (cricket)
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = "#000";
-    ctx.beginPath();
-    ctx.ellipse(0, 2 + this.hop * 0.12, 34 - this.hop * 0.18, 8 - this.hop * 0.1, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // bank the whole (rider + bike) to the RIGHT as lean grows: leaning is
-    // clockwise on screen, so negative rotation tips the top over to the right.
-    ctx.rotate(-this.lean * 0.42);
-    this._drawBikeSprites();
-    ctx.restore();
-
-    // ability chip
-    ctx.font = "12px system-ui, Segoe UI, sans-serif";
-    ctx.fillStyle = "rgba(226,232,240,0.75)";
-    ctx.textAlign = "center";
-    ctx.fillText(this.character.name + " · " + this.character.ability, this.W / 2, this.H - 14);
-  }
-
-  _wheelAt(wx, r, spin) {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(wx, 0);
-    ctx.fillStyle = "#0b0f18";
-    ctx.strokeStyle = "#cbd5e1";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.rotate(spin);
-    ctx.strokeStyle = "#64748b";
-    ctx.lineWidth = 1.6;
-    for (let i = 0; i < 3; i++) {
-      ctx.rotate((Math.PI * 2) / 3);
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -r + 2); ctx.stroke();
+    const sorted = this.obstacles.slice().sort((a, b) => b.ahead - a.ahead);
+    for (const o of sorted) {
+      if (o.hit || o.ahead < -80) continue;
+      const depth = Math.max(0, o.ahead);
+      const k = Math.max(0.03, Math.min(1, 1 - depth / 320));
+      const y = this.kToY(k);
+      const cx = this._roadCX(k) + this.laneToPx(o.type === "log" ? 0 : o.frac);
+      this._drawObstacleShape(o, cx, y, k);
     }
-    ctx.restore();
-  }
-
-  _drawBikeSprites() {
-    const ctx = this.ctx;
-    const ch = this.character;
-    const spin = this.distance * 0.4;
-    const rearR = 15, frontR = 15;
-
-    // --- rear wheel ---
-    this._wheelAt(-18, rearR, spin);
-    // --- front wheel ---
-    this._wheelAt(20, frontR, spin);
-
-    // --- chassis (frame low to wheels) ---
-    ctx.fillStyle = "#dc2626";
-    ctx.strokeStyle = "#7f1d1d";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(-26, -10);
-    ctx.quadraticCurveTo(-6, -20, 14, -14);   // tail rises toward seat
-    ctx.lineTo(30, -6);                       // fork top
-    ctx.quadraticCurveTo(34, 0, 28, 2);
-    ctx.quadraticCurveTo(6, 6, -24, 4);
-    ctx.quadraticCurveTo(-32, 0, -26, -10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // seat
-    ctx.fillStyle = "#1f2937";
-    ctx.beginPath(); ctx.roundRect(2, -20, 16, 6, 3); ctx.fill();
-    // handlebar
-    ctx.strokeStyle = "#0f172a"; ctx.lineWidth = 3; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(27, -8); ctx.lineTo(31, -2); ctx.stroke();
-
-    // --- rider torso over the seat ---
-    ctx.fillStyle = ch.color;
-    ctx.fillRect(-2, -34, 16, 18);            // torso leaning forward
-    ctx.strokeStyle = ch.color; ctx.lineWidth = 3; ctx.lineCap = "round";
-    // forward arm to the handlebar
-    ctx.beginPath(); ctx.moveTo(8, -28); ctx.lineTo(28, -8); ctx.stroke();
-    // far wheel cover hint
-
-    // --- head (character emoji) ---
-    const faceSize = Math.round(ch.id === "cricket" ? 22 : 24);
-    ctx.font = faceSize + 'px serif';
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(ch.emoji, 4, -40);
-
-    // helmet / little stick leg if visible bottom
-    ctx.strokeStyle = "#1f2937"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(-16, -14); ctx.lineTo(-22, 6); ctx.stroke(); // rear leg to peg
   }
 
   _drawParticles() {
     const ctx = this.ctx;
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
-      p.x += p.vx * 1; p.y += p.vy * 1;
-      p.alpha = Math.max(0, p.life / p.maxLife) * p.baseA;
-      const a = Math.max(0, Math.min(1, p.alpha));
-      if (p.kind === "skid") {
-        ctx.fillStyle = "rgba(214,226,244," + a.toFixed(3) + ")";
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
-      } else if (p.kind === "streak") {
-        ctx.strokeStyle = "rgba(148,163,184," + (a * 0.5).toFixed(3) + ")";
-        ctx.lineWidth = p.size;
-        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y + p.len); ctx.stroke();
-      } else if (p.kind === "dust") {
-        ctx.fillStyle = "rgba(196,181,253," + (a * 0.7).toFixed(3) + ")";
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 1.5, 0, Math.PI * 2); ctx.fill();
+      if (!p || p.life <= 0) continue;
+      const a = Math.max(0, p.life / p.maxLife);
+      if (p.kind === "dust") {
+        const rx = this._riderX() + p.x;
+        const ry = this.playerY + p.y - Math.max(0, this.hop - 16) * 0.4;
+        ctx.globalAlpha = a * 0.9; ctx.fillStyle = "#e8c98a";
+        ctx.beginPath(); ctx.arc(rx, ry, Math.max(1, p.size * (1 - a * 0.3)), 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.globalAlpha = a * 0.5; ctx.strokeStyle = "#f7ebb7"; ctx.lineWidth = p.size;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - p.vy * 0.05); ctx.stroke();
+        ctx.globalAlpha = 1;
       }
     }
   }
 
+  _drawRiderBack(pX, y, scale) {
+    const ctx = this.ctx;
+    const c = this.character;
+    const wheelR = 16 * scale;
+    ctx.save();
+    ctx.translate(pX, y + this.roadHalf * 0.10);
+    ctx.rotate(-this.lean * 0.55);
+    ctx.scale(scale, scale);
+    ctx.lineCap = "round";
+    // ground shadow (ground-linked)
+    ctx.save(); ctx.rotate(this.lean * 0.55); ctx.globalAlpha = 0.26; ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.ellipse(0, 0, 40, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    const tyre = (x, r) => {
+      ctx.fillStyle = "#241a12"; ctx.strokeStyle = "#40301c"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(x, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      const sp = this.distance * 0.25; ctx.strokeStyle = "#6b522f"; ctx.lineWidth = 1.5;
+      for (let s = 0; s < 3; s++) { const an = sp + s * 2.094; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + Math.cos(an) * (r - 2), Math.sin(an) * (r - 2)); ctx.stroke(); }
+    };
+    tyre(-13, wheelR); tyre(11, 11);
+    ctx.strokeStyle = c.dark; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(-10, -8); ctx.lineTo(6, -26); ctx.stroke();
+    ctx.lineWidth = 4.5; ctx.beginPath(); ctx.moveTo(6, -26); ctx.lineTo(16, -10); ctx.stroke();
+    ctx.strokeStyle = "#202020"; ctx.lineWidth = 3.6; ctx.beginPath(); ctx.moveTo(8, -22); ctx.lineTo(10, -2); ctx.stroke();
+    // torso (back)
+    ctx.fillStyle = c.color;
+    ctx.beginPath();
+    ctx.moveTo(2, -24); ctx.quadraticCurveTo(10, -44, 2, -50);
+    ctx.quadraticCurveTo(-8, -50, -8, -38); ctx.quadraticCurveTo(-9, -30, 2, -24);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = c.dark; ctx.lineWidth = 2; ctx.globalAlpha = 0.85;
+    ctx.beginPath(); ctx.moveTo(-0.5, -27); ctx.lineTo(-1, -45); ctx.stroke(); ctx.globalAlpha = 1;
+    // arm toward bars
+    ctx.strokeStyle = c.dark; ctx.lineWidth = 4.4; ctx.beginPath(); ctx.moveTo(6, -34); ctx.lineTo(-11, -16); ctx.stroke();
+    // helmet
+    const cy = -52; ctx.fillStyle = c.dark; ctx.beginPath(); ctx.arc(-2, cy, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = c.color; ctx.beginPath(); ctx.arc(-2, cy, 8.2, 0, Math.PI * 2); ctx.fill();
+    if (c.id === "cricket") {
+      ctx.strokeStyle = c.color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-6, cy - 8); ctx.lineTo(-7, cy - 15); ctx.moveTo(1, cy - 9); ctx.lineTo(3, cy - 16); ctx.stroke();
+    }
+    ctx.strokeStyle = "#141414"; ctx.lineWidth = 3.6; ctx.beginPath(); ctx.moveTo(-16, -14); ctx.lineTo(12, -14); ctx.stroke();
+    ctx.strokeStyle = c.dark; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(-7, -18); ctx.lineTo(-7, -6); ctx.moveTo(8, -16); ctx.lineTo(8, -6); ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawRider() {
+    const ctx = this.ctx;
+    const hopPx = Math.max(0, this.hop - 16) * 1.1;
+    const rx = this._riderX();
+    this._drawRiderBack(rx, this.playerY - hopPx, 1.0);
+    ctx.fillStyle = "#fff7e8"; ctx.font = "11px system-ui, Segoe UI, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(this.character.name + "  ·  " + this.character.ability, this.W / 2, this.H - 12);
+  }
+
   _loop(now) {
     if (!this.running) return;
-    const dt = Math.min((now - this._last) / 1000 || 0.016, 0.035);
+    const dt = Math.min((now - this._last) / 1000, 0.035) || 0.016;
     this._last = now;
     this._step(dt);
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.W, this.H);
-    this._drawSceneBack();
+    this._drawDesert();
     this._drawRoad();
     this._drawObstacles();
     this._drawParticles();
     this._drawRider();
+    ctx.fillStyle = "#ffe9b0"; ctx.font = "13px system-ui"; ctx.textAlign = "left";
+    ctx.fillText(this.score + " m  ·  L" + this.level, 10, 18);
+    if (!this.dead) {
+      ctx.font = "10px system-ui"; ctx.fillStyle = "#ffe2a8"; ctx.textAlign = "center";
+      ctx.fillText("HOLD = drift RIGHT   ·   RELEASE = settle", this.W / 2, this.H - 2);
+    }
+    requestAnimationFrame((tt) => this._loop(tt));
+  }
 
-    // HUD: distance + lean gauge
-    ctx.fillStyle = "rgba(226,232,240,0.85)";
-    ctx.font = "13px system-ui, Segoe UI, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(this.score + " m · L" + this.level, this.W - 12, 20);
-    ctx.fillStyle = "rgba(226,232,240,0.45)";
-    ctx.font = "10px system-ui, Segoe UI, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("HOLD ➡ to lean into the curve", 10, this.H - 8);
-    requestAnimationFrame((t) => this._loop(t));
+  _emitAmbient(dt) {
+    if (this.dead) return;
+    const lean = Math.abs(this.lean);
+    if (lean > 0.2 && Math.random() < 34 * dt) {
+      const dir = this.lean >= 0 ? -1 : 1;
+      this.particles.push({ kind: "dust", x: 0, y: 22, vx: dir * (20 + Math.random() * 60), vy: (Math.random() - 0.5) * 30, life: 0.5 + Math.random() * 0.4, maxLife: 1, size: 3 + Math.random() * 3 });
+    }
+    const spd = (this.speed - BASE_SPEED) / MAX_SPEED_UP;
+    if (spd > 0 && Math.random() < (24 + spd * 90) * dt) {
+      this.particles.push({ kind: "streak", x: (Math.random() - 0.5) * this.W * 0.9, y: this.horizonY + Math.random() * (this.H - this.horizonY), vx: 0, vy: 220 + Math.random() * 220, life: 0.35 + Math.random() * 0.3, maxLife: 1, size: 1 + Math.random() * 2 });
+    }
+    if (this.particles.length > 90) this.particles = this.particles.slice(-90);
+    for (const p of this.particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+    this.particles = this.particles.filter((p) => p.life > 0);
   }
 }
+
+// helper predicate used above
+function graspOf(g) { return g; }
