@@ -224,6 +224,27 @@ export class FruitMerge {
     const a = this.fruits[aIdx];
     const b = this.fruits[bIdx];
     const { w } = this.inner;
+
+    // BLEND: two top-tier fruits (WATERMELON, tier 7) together => they
+    // burst into juice and disappear, compacting the pile. Detect this
+    // FIRST (before touching FRUITS[nextTier]) because there is no tier 8.
+    if (a.tier >= 7) {
+      this.fruits[aIdx].dead = true;
+      this.fruits[bIdx].dead = true;
+      this.blendCount++;
+      this.score += 1000;
+      this.onScore(this.score);
+      const { x: ix, w: iw } = this.inner;
+      const wm = FRUITS[6];
+      const px = wm.r * w;
+      this.blendFx = { t: 1.2, x: ix + iw / 2, y: this.inner.y + this.inner.h * 0.4, r: px };
+      this._blendClear();
+      return;
+    }
+
+    // Normal merge: two identical fruits of tier < 7 fuse into the NEXT
+    // visible fruit (pears, tier 6, fuse into WATERMELON, tier 7 — which
+    // then STAYS on the board until a second watermelon blends it away).
     const nextTier = a.tier + 1;
     const target = FRUITS[nextTier - 1];
     const px = target.r * w;   // actual pixel radius of the merged fruit
@@ -234,17 +255,6 @@ export class FruitMerge {
     this.score += target.pts;
     this.onScore(this.score);
     this.unlocked.add(nextTier); // merge-to-unlock
-
-    if (nextTier === 7) {
-      // two watermelons => BLEND into juice, big points + compact pile
-      this.blendCount++;
-      this.score += 1000;
-      this.onScore(this.score);
-      const { x: ix, w: iw } = this.inner;
-      this.blendFx = { t: 1.2, x: ix + iw / 2, y: this.inner.y + this.inner.h * 0.4, r: px };
-      this._blendClear();
-      return;
-    }
 
     this.fruits.push({
       tier: nextTier, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r: target.r,
