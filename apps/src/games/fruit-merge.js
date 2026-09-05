@@ -113,11 +113,7 @@ export class FruitMerge {
     // kill line sits just under the rim: the run ends when a truly-settled
     // fruit is pushed up here — poor placements pile up and overflow.
     this.crushY = this.inner.y + this.inner.h * 0.12;
-    // The drop line: where the NEXT fruit visibly rides, tracking the cursor
-    // left-to-right under the mouth, so you see exactly what/where you drop.
-    this.dropLineY = this.inner.y - 2;
     this.spawnX = this.inner.x + this.inner.w / 2;
-    this._dropX = this.spawnX;
   }
 
   /** World-space polygon vertices for a fruit, from its normalized silhouette.
@@ -169,7 +165,6 @@ export class FruitMerge {
     this.dropLocked = false;
     this.blendFx = null;
     this._overflowHold = 0;
-    this._dropX = this.spawnX;
     this._prime();
     this.running = true;
     this._last = performance.now();
@@ -205,14 +200,18 @@ export class FruitMerge {
     if (!this.running || this.gameOver || this.dropLocked) return;
     this.dropLocked = true;
 
+    const { w } = this.inner;
     const spec = FRUITS[this.currentTier - 1];
-    // Spawn EXACTLY where the held preview sits so the falling fruit is what
-    // & where the player just aligned — no more "drop and hope". Snap the
-    // eased cursor to the raw pointer first so preview and drop match.
-    this._dropX = this.spawnX;
+    const px = spec.r * w;       // actual pixel radius of the dropped fruit
+    // furthest negative-Y vertex = top of the silhouette (for spawn height)
+    let top = 0;
+    for (const [, vy] of spec.poly) top = Math.min(top, vy);
+    // spawn just above the rim so it visibly drops IN, with spawn grace.
+    // r is stored NORMALIZED (fraction of inner width); geometry helpers
+    // multiply by inner.w to get pixels, so do NOT pre-multiply here.
     this.fruits.push({
-      tier: this.currentTier, x: this._dropX,
-      y: this.dropLineY, r: spec.r,
+      tier: this.currentTier, x: this.spawnX,
+      y: this.rimY - top * px - 4, r: spec.r,
       poly: spec.poly, vx: 0, vy: 0,
       emoji: spec.emoji, color: spec.color, pts: spec.pts,
       born: this.t, dead: false, ignore: 0,
@@ -452,12 +451,6 @@ export class FruitMerge {
 
     if (this.blendFx) { this.blendFx.t -= dt; if (this.blendFx.t <= 0) this.blendFx = null; }
 
-    // ease the held-fruit preview toward the cursor so it glides along the
-    // drop line instead of teleporting (and it snaps tight once it arrives)
-    if (this._dropX == null) this._dropX = this.spawnX;
-    this._dropX += (this.spawnX - this._dropX) * Math.min(1, dt * 22);
-    if (Math.abs(this.spawnX - this._dropX) < 0.6) this._dropX = this.spawnX;
-
     this._draw();
     if (!this.gameOver) requestAnimationFrame((t) => this._loop(t));
   }
@@ -564,10 +557,13 @@ export class FruitMerge {
       this._drawFruit(f);
     }
 
-    // --- held fruit preview: the NEXT fruit rides the drop line and tracks
-    // the cursor left-to-right, so you SEE it before you click to drop. ---
+    // --- held fruit ghost + landing outline (its REAL polygon outline) ---
     if (!this.dropLocked && !this.gameOver) {
-      this._drawHeldPreview();
+      const hold = FRUITS[this.currentTier - 1];
+      const hr = hold.r * this.inner.w;
+      ctx.globalAlpha = 0.85;
+      this._drawGhost({ x: this.spawnX, y: this.rimY - 30, r: hr, poly: hold.poly, emoji: hold.emoji });
+      ctx.globalAlpha = 1;
     }
 
     // --- upcoming stream ---
@@ -596,61 +592,39 @@ export class FruitMerge {
     ctx.fillText(f.emoji, f.x, f.y + 1);
   }
 
-  /** Held-fruit preview at the drop line: a bright, fully-opaque fruit that
-   *  rides the cursor left-to-right right under the mouth. This is exactly
-   *  the fruit & position that will drop — no more blind clicking. A soft
-   *  glow + short fall-path tick make it obvious where it currently sits. */
-  _drawHeldPreview() {
+  /** Held-fruit landing preview: the real polygon outline + emoji. */
+  _drawGhost(f) {
     const ctx = this.ctx;
     const { w } = this.inner;
-    const hold = FRUITS[this.currentTier - 1];
-    const hr = hold.r * w;               // pixel radius
-    const x = this._dropX ?? this.spawnX;
-    const y = this.dropLineY;
-
-    // faint dashed fall-path tick under the fruit so you read the drop line
-    ctx.save();
-    ctx.setLineDash([3, 6]);
-    ctx.strokeStyle = "rgba(139,147,163,0.35)";
-    ctx.lineWidth = 1;
+    const s = f.r * w;
+    // polygon outline (the fruit's true silhouette)
     ctx.beginPath();
-    ctx.moveTo(x, y + hr + 2);
-    ctx.lineTo(x, y + hr + 12);
+    for (let i = 0; i < f.poly.length; i++) {
+      const x = f.x + f.poly[i][0] * s;
+      const y = f.y + f.poly[i][1] * s;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = "rgba(139,147,163,0.6)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.setLineDash([]);
-    // soft glow ring lifts the held fruit off the busy background
-    const g = ctx.createRadialGradient(x, y, hr * 0.5, x, y, hr * 2.1);
-    g.addColorStop(0, "rgba(139,147,163,0.28)");
-    g.addColorStop(1, "rgba(139,147,163,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(x, y, hr * 2.1, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(139,147,163,0.08)";
     ctx.fill();
-    ctx.restore();
-
-    // the actual fruit at full opacity — clearly what you're about to drop
-    this._drawFruit({
-      x: x, y: y, r: hold.r, poly: hold.poly,
-      emoji: hold.emoji, color: hold.color, pts: hold.pts,
-      polyPts: null,
-    });
+    this._drawFruit(f);
   }
 
   _drawStream() {
     const ctx = this.ctx;
-    // Next-up icons ride just under the drop line (below the held fruit),
-    // fanning out from the held position so you see the queue without it
-    // floating mid-pile. This shows the upcoming stream after currentTier.
     const preview = this.stream.slice(0, 3);
-    const x = this._dropX ?? this.spawnX;
-    const baseY = this.dropLineY + this.inner.h * 0.05;
+    let x = this.spawnX;
     for (let i = 0; i < preview.length; i++) {
       const spec = FRUITS[preview[i] - 1];
       ctx.globalAlpha = 0.9 - i * 0.22;
-      ctx.font = `${i === 0 ? 16 : 13 - i}px "Segoe UI Emoji", serif`;
+      ctx.font = `${i === 0 ? 14 : 12 - i}px "Segoe UI Emoji", serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(spec.emoji, x + i * 16, baseY + i * 3);
+      ctx.fillText(spec.emoji, x, this.rimY + 40 + i * 14);
+      x += 12;
     }
     ctx.globalAlpha = 1;
   }
