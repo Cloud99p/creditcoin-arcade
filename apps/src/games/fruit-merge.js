@@ -557,18 +557,11 @@ export class FruitMerge {
       this._drawFruit(f);
     }
 
-    // --- held fruit ghost + landing outline (its REAL polygon outline) ---
-    if (!this.dropLocked && !this.gameOver) {
-      const hold = FRUITS[this.currentTier - 1];
-      const hr = hold.r * this.inner.w;
-      ctx.globalAlpha = 0.85;
-      this._drawGhost({ x: this.spawnX, y: this.rimY - 30, r: hr, poly: hold.poly, emoji: hold.emoji });
-      ctx.globalAlpha = 1;
-    }
-
-    // --- upcoming stream ---
-    this._drawStream();
-
+    // --- NEXT fruit to drop: the ONE visible fruit. It rides the drop line
+    // (just under the mouth) and tracks the cursor left-to-right, so you can
+    // aim precisely before clicking. Everything else (stream, queue, outlines)
+    // is intentionally hidden — you only ever see what you're about to drop.
+    if (!this.dropLocked && !this.gameOver) this._drawHeldPreview();
     // --- blend FX ---
     if (this.blendFx) this._drawBlend();
 
@@ -592,41 +585,26 @@ export class FruitMerge {
     ctx.fillText(f.emoji, f.x, f.y + 1);
   }
 
-  /** Held-fruit landing preview: the real polygon outline + emoji. */
-  _drawGhost(f) {
-    const ctx = this.ctx;
+  /** The single next fruit to drop, drawn fully opaque so it's clearly
+   *  visible riding the drop line under the mouth. Position matches where it
+   *  enters, so what you see is exactly what drops — nothing else on screen. */
+  _drawHeldPreview() {
     const { w } = this.inner;
-    const s = f.r * w;
-    // polygon outline (the fruit's true silhouette)
-    ctx.beginPath();
-    for (let i = 0; i < f.poly.length; i++) {
-      const x = f.x + f.poly[i][0] * s;
-      const y = f.y + f.poly[i][1] * s;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.strokeStyle = "rgba(139,147,163,0.6)";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.fillStyle = "rgba(139,147,163,0.08)";
-    ctx.fill();
-    this._drawFruit(f);
+    const hold = FRUITS[this.currentTier - 1];
+    const hr = hold.r * w;                 // pixel radius
+    const x = this.spawnX;
+    const y = this.rimY - hr * 0.9;        // centered a hair below the opening
+
+    this._drawFruit({
+      x: x, y: y, r: hold.r, poly: hold.poly,
+      emoji: hold.emoji, color: hold.color, pts: hold.pts,
+    });
   }
 
+  /** Stream is intentionally not drawn (see header note) — only the next
+   *  single fruit is shown each frame. Kept as a stub to avoid layout churn. */
   _drawStream() {
-    const ctx = this.ctx;
-    const preview = this.stream.slice(0, 3);
-    let x = this.spawnX;
-    for (let i = 0; i < preview.length; i++) {
-      const spec = FRUITS[preview[i] - 1];
-      ctx.globalAlpha = 0.9 - i * 0.22;
-      ctx.font = `${i === 0 ? 14 : 12 - i}px "Segoe UI Emoji", serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(spec.emoji, x, this.rimY + 40 + i * 14);
-      x += 12;
-    }
-    ctx.globalAlpha = 1;
+    // hidden on purpose
   }
 
   _drawBlend() {
