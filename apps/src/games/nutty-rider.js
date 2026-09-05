@@ -12,8 +12,18 @@
  *   dirt sweeps out from under you.
  *
  * LOSE = the rider leaves the DIRT (you rode off the platform) — either by
- * drifting too far as a bend whips past, or being KNOCKED off by a hazard.
- * Obstacles: FANS blow you toward the rim; swinging LOGS knock you sideways.
+ * drifting too far as a bend whips past, being BLOWN off by a fan, or KNOCKED
+ * off by a swinging log.
+ * Obstacles:
+ *   - FAN: a stationary blower parked on an EDGE of the dirt, blowing a
+ *     continuous cross-track wind toward the FAR edge. A LEFT-edge fan blows
+ *     you RIGHT, a RIGHT-edge fan blows you LEFT (against your only-steer-rite
+ *     control — the nasty one). You must steer clear of a fan's blast or you
+ *     get carried across and off.
+ *   - LOG: a TIMBER BEAM hung as a PENDULUM that swings LEFT and RIGHT across
+ *     the ribbon. Time your drift so you pass through the gap while the head
+ *     is swung away from your line; hit the head and it knocks you sideways
+ *     (often off the rim).
  * They appear anywhere, and sometimes right after a bend.
  *
  * Background = desert (sun, mesas, heat haze). Track = graded DIRT.
@@ -42,8 +52,17 @@ const LANE_W = 1.0;
 const BEND_AMP = 0.96;
 const BEND_SLOPE = 0.00085;   // lane-units of centreline-lean per distance unit
 // Controls the rider's own lateral physics (velLane in lane-units/sec).
-const SCRUB = 0.7;           // passive scrub: slowly eases rider left on release
-const GRIP_DRAG = 2.2;       // tyre scrub multiplies velocity decay
+const CENTER_SPRING = 3.0;        // released: weak spring back to road middle
+const START_GRACE = 60;           // first-distance units of "glued to centre"
+// Obstacle tuning
+const FIRST_OBSTACLE = 430;       // distance until the very first hazard
+const SPAWN_MIN = 380;            // gap between hazards (low end)
+const SPAWN_RANGE = 300;          // extra random gap
+const FAN_AMP = 5.2;              // sustained cross-wind strength (units/s^2)
+const FAN_REACH = 1.9;            // lateral reach of a fan's blast (lane units)
+const LOG_SWING = 0.55;           // pendulum log head lateral amplitude
+const LOG_CROSS_BAND = 0.30;      // collider half-width for the swinging head
+const GRIP_DRAG = 2.2;            // tyre scrub multiplies velocity decay
 
 export class NuttyRider {
   constructor(canvas, { onScore, onEnd, character = CHARACTERS[0] } = {}) {
@@ -67,7 +86,7 @@ export class NuttyRider {
 
     // course + world
     this.courseSegs = [];
-    this.nextSpawn = 90;
+    this.nextSpawn = FIRST_OBSTACLE;
     this.obstacles = [];
     this.particles = [];
     this.score = 0; this.level = 1;
@@ -163,7 +182,8 @@ export class NuttyRider {
     this.t = 0; this.distance = 0; this.speed = 0;
     this.lane = 0; this.velLane = 0; this.lean = 0;
     this.hold = false; this.hop = 16; this.dead = false;
-    this.obstacles = []; this.particles = []; this.nextSpawn = 90;
+    this.lane = 0; this.velLane = 0; this.lean = 0;
+    this.obstacles = []; this.particles = []; this.nextSpawn = FIRST_OBSTACLE;
     this.score = 0; this.level = 1;
   }
 
@@ -181,32 +201,36 @@ export class NuttyRider {
 
     // --- RIDER LATERAL ------------------------------------------------
     // The rider's absolute screen-lane is driven by steering. ONLY a HOLD
-    // pushes right (HARD lean = right). Released, the bike scrubs back LEFT a
-    // little on its own. Falls occur RELATIVE to the dirt centre (`bias`),
-    // which a bend sweeps sideways underneath you — so you must HOLD to ride a
-    // right sweep right, and RELEASE so the return lets you settle centre.
+    // pushes you RIGHT (hard lean). RELEASED, a weak spring settles you back
+    // toward the STRAIGHT road's middle (lane 0) so drift is a timing tool:
+    // you ease right to ride a right sweep, and let go to drift back to the
+    // middle. Falls are RELATIVE to the moving dirt centre (`bias`), which a
+    // bend sweeps sideways under you — and which a fan can shove you clear of.
     const turn = this.character.stat.turn;
-    const leanLim = 1 - Math.min(0.9, this.lean);  // deeper lean = less room to keep steering
-    if (this.hold) {
+    // Glue-to-centre for the first moments so the driver starts dead on the
+    // middle of the track (Cloud: starts at the middle of the track).
+    const inGrace = this.distance < START_GRACE && Math.abs(bias) < 0.02;
+    if (inGrace) {
+      this.lean = 0; this.velLane = 0; this.lane = 0;   // pinned to bed centre
+    } else if (this.hold) {
       this.lean += (MAX_LEAN - this.lean) * Math.min(1, PRESS_ACCEL * turn * dt);
       this.velLane += 1.15 * turn * 46 * dt;              // push RIGHT (units/s)
     } else {
       this.lean += (0 - this.lean) * Math.min(1, RECOVER * turn * dt);
-      this.velLane -= SCRUB * 30 * dt;                    // gentle leftward scrub
+      // weak symmetric spring home to the middle; gentle enough that a fan gust
+      // or log knock can still push you off-centre (which is what makes those
+      // hazards threatening).
+      this.velLane += -this.lane * CENTER_SPRING * dt;
+      if (Math.abs(this.lane) < 0.02 && Math.abs(this.velLane) < 0.05) this.velLane = 0;
     }
-    // grip = how well the slide is collected;
+    // grip = how well the slide is collected
     this.velLane *= Math.max(0, 1 - GRIP_DRAG * graspOf(grip) * dt);
     this.lane += this.velLane * dt;
     // screen-coherent reach: never drawn past a modest half-screen envelope
     this.lane = Math.max(-0.96, Math.min(0.96, this.lane));
-    void leanLim;
+    void turn;
 
     // --- hop ------------------------------------------------
-    if (this.character.id === "cricket") {
-      if (this.hold && this.lane > bias + 0.55 && this.hop <= 16) {
-        // (cricket hop is input-triggered only; nothing forced here)
-      }
-    }
     if (this.hop > 16) this.hop = Math.max(16, this.hop - 260 * dt);
     else this.hop = 16;
 
@@ -221,26 +245,47 @@ export class NuttyRider {
 
     // --- obstacles --------------------------------------------
     this.nextSpawn -= this.speed * dt;
-    if (this.nextSpawn <= 0) { this._spawnOb(); this.nextSpawn = 240 + Math.random() * 220 + (this.speed > BASE_SPEED ? 40 : 0); }
-    for (const o of this.obstacles) { o.ahead -= this.speed * dt; o.t += dt; if (o.type === "log") o.swing = Math.sin(o.t * 1.4 + o.phase) * 0.55; }
-    this.obstacles = this.obstacles.filter((o) => o.ahead > -60 && !o.hit);
+    if (this.nextSpawn <= 0) {
+      this._spawnOb();
+      this.nextSpawn = SPAWN_MIN + Math.random() * SPAWN_RANGE + (this.speed > BASE_SPEED ? 60 : 0);
+    }
+    for (const o of this.obstacles) {
+      o.ahead -= this.speed * dt; o.t += dt;
+      o.swing = o.type === "log" ? Math.sin(o.t * 2.0 + o.phase) * LOG_SWING : 0;
+    }
+    // keep near-obstacles until they pass the rider (then they're culled)
+    this.obstacles = this.obstacles.filter((o) => o.ahead > -70);
 
     this._emitAmbient(dt);
 
-    // collisions at the rider's current band
+    // FANS: stationary edge blowers = a continuous WIND COLUMN, not a hit.
+    // While the fan is sweeping past the rider's depth AND the rider is inside
+    // the fan's lateral reach, the fan steadily shoves the rider toward the
+    // opposite edge (left-edge fan => RIGHT(+), right-edge fan => LEFT(-)).
     for (const o of this.obstacles) {
-      if (o.hit || o.ahead > 60 || o.ahead < -60) continue;
-      // near contact if within ~ a band around the rider on screen distance
-      const oBand = o.band !== undefined ? o.band : 0; // obstacle's own lateral band offset from road centre
-      const obxRel = o.type === "log" ? o.swing : o.frac;
-      const obxC = bias + obxRel;                       // absolute lane of hazard
-      const gap = Math.abs(obxC - this.lane);
-      const half = o.type === "log" ? 0.16 : 0.12;
-      if (gap < 0.12 + half) {
-        // only when the obstacle is actually AT the rider's depth
-        const krel = 1 + o.ahead / 40;
-        if (o.ahead > -40 && o.ahead < 2) this._resolveHit(o);
+      if (o.type !== "fan") continue;
+      o.activeNear = false;
+      if (o.ahead > 25 || o.ahead < -170) continue;
+      const fx = bias + o.side * 0.86;         // shoulder the blower sits on
+      const dir = o.blow;                       // +1 blow-RIGHT, -1 blow-LEFT
+      const to = Math.abs(this.lane - fx);
+      if (to <= FAN_REACH) {
+        o.activeNear = true;
+        const blast = 1 - this.character.stat.knock;      // low knock = pushed more
+        const gRes = Math.max(0.3, 1 - this.character.stat.grip * 0.28);
+        const amp = FAN_AMP * blast * gRes * (0.55 + 0.45 * (1 - to / FAN_REACH));
+        this.velLane += dir * amp * dt;                    // continuous cross-wind
       }
+    }
+
+    // LOGS: pendulum heads sweep a lateral band; only a hit when the swinging
+    // head is actually near your lane AND the log is at your depth.
+    for (const o of this.obstacles) {
+      if (o.type !== "log" || o.hit) continue;
+      if (o.ahead > 2 || o.ahead < -48) continue;
+      const headAt = o.swing;                    // head lateral offset from centre (units)
+      const gap = Math.abs((bias + headAt) - this.lane);
+      if (gap < LOG_CROSS_BAND) this._resolveHit(o);
     }
 
     this.score = Math.max(this.score || 0, Math.floor(this.distance / 12));
@@ -249,35 +294,41 @@ export class NuttyRider {
   }
 
   _spawnOb() {
-    // pick a lateral band offset from the current road CENTRE; a fan may sit
-    // on the shoulder pressing you off, a log swings across a wider arc
-    const type = Math.random() < 0.5 ? "fan" : "log";
-    if (type === "log") {
-      this._addOb(type, 0, 300 + Math.random() * 160, Math.random() * 6.28);
+    // a swinging log OR an edge-mounted stationary fan
+    if (Math.random() < 0.5) {
+      // LOG: pendulum spinning across the ribbon from a centre gantry
+      this._addOb("log", Math.random() * 6.28);
     } else {
-      // fans: some sit near your line; the hardest sit just off the shoulder
-      const edge = Math.random() < 0.45;
-      const frac = edge ? (Math.random() < 0.5 ? -0.78 : 0.78) : (Math.random() * 2 - 1) * 0.5;
-      this._addOb(type, frac, 300 + Math.random() * 160, 0);
+      // FAN: parked on one edge, blowing a cross-track current toward the FAR
+      // edge. Left-edge blows right; right-edge blows left (against steering).
+      this._addOb("fan", 0, Math.random() < 0.5 ? -1 : 1);
     }
   }
-  _addOb(type, frac, ahead, phase) {
-    this.obstacles.push({ type, frac, ahead, phase, hit: false, t: 0, swing: 0 });
+  _addOb(type, phase, side) {
+    const o = { type, ahead: 320 + Math.random() * 200,
+                phase, hit: false, t: 0, swing: 0, activeNear: false,
+                side: 0, blow: 0 };
+    if (type === "fan") {
+      o.side = side || (Math.random() < 0.5 ? -1 : 1); // shoulder edge
+      o.blow = o.side <= 0 ? 1 : -1;   // left-edge blows RIGHT(+); right blows LEFT(-)
+    }
+    this.obstacles.push(o);
+    return o;
   }
 
   _resolveHit(o) {
     if (this.dead) return;
-    if (o.type === "log" && this.character.id === "cricket" && this.hop > 16) { o.hit = true; this.hop = 16; return; }
+    // cricket's hop clears a log
+    if (this.character.id === "cricket" && this.hop > 16) { o.hit = true; this.hop = 16; return; }
     o.hit = true;
-    // a hazard shoves the rider toward an edge, and takes a bite of lean
-    const pushDir = Math.abs(this.lane) < 0.05 ? (Math.random() < 0.5 ? 1 : -1)
-      : (this.lane >= 0 ? 1 : -1);
-    const useKnock = this.character.stat.knock * (o.type === "fan" ? 1.0 : 0.85);
-    const resist = 1 - useKnock;
-    const mag = (o.type === "fan" ? 0.30 : 0.30) * (1.25 - this.character.stat.grip * 0.15);
-    this.velLane += pushDir * resist * mag * 3.0;
+    // a swinging log smacks the rider sideways (toward whichever edge the log
+    // was sweeping — i.e. away from the head's current side) and steals lean.
+    const knockDir = o.swing >= 0 ? 1 : -1;                 // toward the far of the head
+    const resist = 1 - this.character.stat.knock;
+    const mag = (0.30) * (1.25 - this.character.stat.grip * 0.15);
+    this.velLane += knockDir * resist * mag * 3.0;
     this.lean = Math.min(MAX_LEAN, this.lean + 0.25);
-    // knock may put you over the edge at once — check now (goat can still claw)
+    // the knock may already put you over the rim — check now (goat can still claw)
     const bias = this._centerBias(this.distance);
     if (Math.abs(bias - this.lane) > (this.character.id === "goat" ? LANE_W + 0.02 : LANE_W - 0.012)) {
       if (this.character.id === "goat") { this.velLane *= -0.5; /* bounced back in */ }
@@ -386,64 +437,82 @@ export class NuttyRider {
 
   _drawObstacleShape(o, cx, y, k) {
     const ctx = this.ctx;
-    const s = Math.max(0.16, 0.3 + k * 1.1);
+    const s = Math.max(0.16, 0.3 + k * 1.3);
     ctx.save();
     ctx.translate(cx, y);
     if (o.type === "fan") {
+      // --- stationary EDGE fan on its shoulder, blowing inward across the track
       ctx.scale(s, s);
-      ctx.fillStyle = "#7f6a2f";
+      // pointing: a left-edge fan (blow RIGHT) should face the track (to the
+      // +x); mirror so the blades/gust stream point the blow direction.
+      const mirror = o.blow < 0 ? -1 : 1;   // face inward (toward the road)
+      ctx.scale(mirror, 1);
+      ctx.fillStyle = "#7f6a2f";           // base mount
       ctx.beginPath(); ctx.ellipse(0, 9, 34, 11, 0, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = "#474747"; ctx.strokeStyle = "#2c2c2c"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.roundRect(-20, -13, 40, 32, 6); ctx.fill(); ctx.stroke();
+      // blower head with rotating blades
       ctx.save();
-      ctx.translate(0, -20);
-      ctx.fillStyle = "#161616"; ctx.strokeStyle = "#8a8a8a"; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(0, 0, 28, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      // rotating danger blades
-      const a = this.t * 20;
+      ctx.translate(-6, -20);
+      const a = this.t * 18;
+      ctx.beginPath(); ctx.arc(6, 0, 27, 0, Math.PI * 2); ctx.fillStyle = "#9b1b1b"; ctx.fill(); ctx.strokeStyle = "#2c2c2c"; ctx.lineWidth = 2; ctx.stroke();
       for (let b = 0; b < 3; b++) {
         const an = a + b * 2.094;
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(an) * 26, Math.sin(an) * 26);
-        ctx.strokeStyle = "rgba(255,120,120,0.8)"; ctx.lineWidth = 6; ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(6 + Math.cos(an) * 26, Math.sin(an) * 26);
+        ctx.strokeStyle = "rgba(255,150,150,0.85)"; ctx.lineWidth = 6; ctx.stroke();
       }
-      ctx.fillStyle = "rgba(255,190,90,0.95)"; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255,210,120,0.95)"; ctx.beginPath(); ctx.arc(6, 0, 5, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-      // gust toward the play lane (drawn pointing whichever the hazard blows)
-      ctx.fillStyle = "rgba(255,255,240,0.3)";
-      for (let gIdx = 0; gIdx < 3; gIdx++) { const yy = -14 - gIdx * 9; ctx.fillRect(-58, yy - 1, 16 + gIdx * 6, 2); }
+      // stream of wind lines jetting INWARD toward the road centre
+      ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
+      for (let gIdx = 0; gIdx < 3; gIdx++) {
+        const yy = 6 + gIdx * 9;
+        const wob = Math.sin(this.t * 40 + gIdx * 2.1) * 5;
+        ctx.beginPath();
+        ctx.moveTo(-85, yy);
+        ctx.quadraticCurveTo(-50 - gIdx * 10, yy - 2 + wob, 6, yy + wob);
+        ctx.stroke();
+      }
       ctx.restore();
     } else {
-      // LOG pendulum: a timber beam hinged on one side swinging across
+      // --- PENDULUM LOG: a beam hung from an overhead gantry that swings left/right
       ctx.scale(s, s);
-      const L = 30;
-      // pivot post
-      ctx.fillStyle = "#5d4118"; ctx.fillRect(6, 0, 7, 20);
-      ctx.fillStyle = "#6e501f"; ctx.fillRect(0, 20, 20, 6);
+      const len = 46;                      // chain length (drawn px)
+      const ang = Math.asin(Math.max(-1, Math.min(1, o.swing / 1.0))); // rad from swing
+      // overhead gantry beam (static across the centre)
       ctx.save();
-      ctx.translate(0, 0);
-      // beam angled by the swing when NOT centred on the hinge is complex;
-      // draw the log as a horizontal swinging board at this position
-      const grad = ctx.createLinearGradient(-L, 0, L, 0);
+      ctx.fillStyle = "#4a3212"; ctx.fillRect(-24, -len - 12, 48, 8);
+      // chain / arm from pivot to head, rotated by swing angle
+      ctx.rotate(ang);
+      ctx.strokeStyle = "#6e5a36"; ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.moveTo(0, -len - 8); ctx.lineTo(0, -16); ctx.stroke();
+      // hanging log (perpendicular to the arm so it stays horizontal-ish)
+      const grad = ctx.createLinearGradient(-18, 0, 18, 0);
       grad.addColorStop(0, "#8a4a12"); grad.addColorStop(0.5, "#c9842a"); grad.addColorStop(1, "#6b3a10");
       ctx.fillStyle = grad;
-      ctx.beginPath(); ctx.roundRect(-L, -5, L * 2, 10, 5); ctx.fill();
+      ctx.save(); ctx.rotate(Math.PI / 2); ctx.translate(0, -14);
+      ctx.beginPath(); ctx.roundRect(-16, -5, 32, 10, 5); ctx.fill();
       ctx.strokeStyle = "#f0b54a"; ctx.lineWidth = 1.2; ctx.stroke();
-      ctx.fillStyle = "rgba(70,35,6,0.6)";
-      for (let gIdx = 0; gIdx < 3; gIdx++) ctx.fillRect(-L + 5 + gIdx * 18, -3, 2, 6);
       ctx.restore();
       ctx.restore();
+      // warn glint at the head (the lethal part)
+      ctx.save(); ctx.rotate(ang); ctx.fillStyle = "rgba(255,200,120,0.9)";
+      ctx.beginPath(); ctx.arc(0, -21, 3.4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
     }
+    ctx.restore();
   }
 
   _drawObstacles() {
     const ctx = this.ctx;
     const sorted = this.obstacles.slice().sort((a, b) => b.ahead - a.ahead);
     for (const o of sorted) {
-      if (o.hit || o.ahead < -80) continue;
+      if (o.hit || o.ahead < -70) continue;
       const depth = Math.max(0, o.ahead);
       const k = Math.max(0.03, Math.min(1, 1 - depth / 320));
       const y = this.kToY(k);
-      const cx = this._roadCX(k) + this.laneToPx(o.type === "log" ? 0 : o.frac);
+      const cx = this._roadCX(k) + this.laneToPx(
+        o.type === "fan" ? o.side * 0.86 : 0      // fans sit on their shoulder; logs hang from centre
+      );
       this._drawObstacleShape(o, cx, y, k);
     }
   }
